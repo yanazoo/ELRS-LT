@@ -55,7 +55,7 @@ function renderRoster(){
           +'<input type="text" id="editName" value="'+esc(r.name)+'" maxlength="20" placeholder="パイロット名" autocomplete="off" style="background:var(--bg);border:1px solid var(--accent);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px;width:100%">'
           +'<input type="text" id="editYomi" value="'+esc(r.yomi||'')+'" maxlength="20" placeholder="読み方（よみかた）" autocomplete="off" style="background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:11px;width:100%">'
         +'</div>'
-        +'<input type="text" id="editMac" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px" autocomplete="off">'
+        +'<input type="text" id="editUid" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px" autocomplete="off">'
         +'<div style="display:flex;flex-direction:column;gap:2px">'
           +'<div style="display:flex;align-items:center;gap:3px">'
             +'<label style="color:var(--muted);font-size:10px;width:20px">入</label>'
@@ -82,7 +82,7 @@ function renderRoster(){
         '<div style="flex:1;min-width:80px">'
           +'<span class="roster-name">'+esc(r.name)+yomiLine+'</span>'
         +'</div>'
-        +'<span class="roster-mac">'+(r.uid||'<span style="color:var(--err)">MAC未設定</span>')+'</span>'
+        +'<span class="roster-uid">'+(r.uid||'<span style="color:var(--err)">UID未設定</span>')+'</span>'
         +onlineMark+activeBadge
         +'<div class="roster-actions">'
           +'<select class="ch-select" data-rid="'+r.id+'" onchange="onChSelectChange(this)">'
@@ -117,7 +117,7 @@ function hideAddForm(){
   document.getElementById('addForm').style.display='none';
   document.getElementById('addName').value='';
   document.getElementById('addYomi').value='';
-  document.getElementById('addMac').value='';
+  document.getElementById('addUid').value='';
   document.getElementById('addEnter').value='-80';
   document.getElementById('addExit').value='-90';
 }
@@ -125,14 +125,14 @@ function hideAddForm(){
 async function submitAdd(){
   var name=document.getElementById('addName').value.trim();
   var yomi=document.getElementById('addYomi').value.trim();
-  var mac=document.getElementById('addMac').value.trim().toUpperCase();
+  var uid=document.getElementById('addUid').value.trim().toUpperCase();
   var enter=parseInt(document.getElementById('addEnter').value)||(-80);
   var exit_=parseInt(document.getElementById('addExit').value)||(-90);
   if(!name){toast('⚠️ 名前を入力してください');return;}
-  var validMac=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(mac);
-  if(mac&&!validMac){toast('⚠️ MAC形式: AA:BB:CC:DD:EE:FF');return;}
+  var validUid=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(uid);
+  if(uid&&!validUid){toast('⚠️ UID形式: AA:BB:CC:DD:EE:FF');return;}
   try{
-    var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,yomi,uid:validMac?mac:''})});
+    var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,yomi,uid:validUid?uid:''})});
     if(r.ok){
       var body=await r.json();
       await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:body.id,enter,exit:exit_})});
@@ -148,14 +148,14 @@ function cancelEdit(){editingRosterId=null;renderRoster();}
 async function submitEdit(id){
   var name=document.getElementById('editName').value.trim();
   var yomi=document.getElementById('editYomi').value.trim();
-  var mac=document.getElementById('editMac').value.trim().toUpperCase();
+  var uid=document.getElementById('editUid').value.trim().toUpperCase();
   var enter=parseInt(document.getElementById('editEnter').value)||(-80);
   var exit_=parseInt(document.getElementById('editExit').value)||(-90);
   if(!name){toast('⚠️ 名前を入力してください');return;}
-  var validMac=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(mac);
-  if(mac&&!validMac){toast('⚠️ MAC形式: AA:BB:CC:DD:EE:FF');return;}
+  var validUid=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(uid);
+  if(uid&&!validUid){toast('⚠️ UID形式: AA:BB:CC:DD:EE:FF');return;}
   try{
-    var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name,yomi,uid:validMac?mac:''})});
+    var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name,yomi,uid:validUid?uid:''})});
     if(r.ok){
       await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,enter,exit:exit_})});
       editingRosterId=null;await loadRoster();applyActiveToSlots();buildRaceCards();toast('✓ 更新しました');

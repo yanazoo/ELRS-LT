@@ -94,7 +94,7 @@ button:not(:disabled):hover{filter:brightness(1.15)}
 .roster-item:hover{background:var(--sf2)}
 .roster-name{font-weight:600;font-size:13px;flex:1;min-width:80px}
 .roster-yomi{font-size:10px;color:var(--muted);display:block;font-weight:normal}
-.roster-mac{font-family:monospace;font-size:11px;color:var(--muted);min-width:120px}
+.roster-uid{font-family:monospace;font-size:11px;color:var(--muted);min-width:120px}
 .active-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
 .active-badge.p0{background:var(--p0-bg);color:var(--p0);border:1px solid var(--p0)}
 .active-badge.p1{background:var(--p1-bg);color:var(--p1);border:1px solid var(--p1)}
@@ -204,7 +204,7 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
 
   <div class="global-config-card">
     <h3 class="global-title">📡 機体スキャン</h3>
-    <p class="section-desc">機体（XIAO ESP32-C3）の電源を入れると自動検出されます。名前を入力してパイロット情報に登録してください。入RSSI・出RSSIはスキャン時の電波強度から自動設定されます。</p>
+    <p class="section-desc">ドローンの EP1/EP2 TCXO（標準 ELRS ファーム）の電源を入れると、ゲートスニファーが ELRS バインド UID を自動検出します。名前を入力してパイロット情報に登録してください。入RSSI・出RSSIはスキャン時の電波強度から自動設定されます。</p>
     <div id="scanList" style="min-height:32px"><span style="color:var(--muted);font-size:12px">スキャン待機中... 機体の電源を入れてください</span></div>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button onclick="scanRefresh(true)" class="btn-secondary" style="flex:1;font-size:12px">🔄 スキャン更新</button>
@@ -222,13 +222,13 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
       <button onclick="clearChannelAssignments()" class="btn-secondary" style="flex:1;font-size:12px;padding:5px 0">✖ 全チャンネル解除</button>
     </div>
     <div class="search-row">
-      <input type="text" class="search-input" id="searchInput" placeholder="🔍 名前・MACで検索..." oninput="renderRoster()">
+      <input type="text" class="search-input" id="searchInput" placeholder="🔍 名前・UIDで検索..." oninput="renderRoster()">
     </div>
     <div id="addForm" style="display:none;background:var(--sf2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:10px">
       <div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:8px">新規パイロット追加</div>
       <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">名前</label><input type="text" id="addName" placeholder="パイロット名" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
       <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">読み方</label><input type="text" id="addYomi" placeholder="パイロット名のよみかた" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
-      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">機体 MAC</label><input type="text" id="addMac" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" autocomplete="off" style="flex:1;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">バインド UID</label><input type="text" id="addUid" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" autocomplete="off" style="flex:1;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
       <div class="config-row" style="gap:8px">
         <label style="width:70px;font-size:11px">入RSSI</label>
         <input type="number" id="addEnter" value="-80" min="-120" max="0" style="width:70px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center">
