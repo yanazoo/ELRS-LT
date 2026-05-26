@@ -1,4 +1,0 @@
-# Append to the repo's existing .gitignore
-
-# EP1 sniffer local secrets (real UIDs / Gate MAC live here)
-src/gate_ep1/secrets.h

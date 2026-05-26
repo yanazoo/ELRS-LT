@@ -1,91 +1,45 @@
-#include <Arduino.h>
-#include <ArduinoJson.h>
-#include "json_api.h"
-#include "data_model.h"
+Import("env")
+import os
 
-const char* activeName(int slot) {
-    int ri = activePilots[slot];
-    return (ri >= 0 && ri < rosterCount) ? roster[ri].name : "---";
-}
+# arduino-esp32 3.x added a "Network" library that WiFi.h depends on.
+# PlatformIO does not automatically include it when the WiFi framework library
+# pulls it in.
 
-int activeSlotOf(int ri) {
-    for (int s = 0; s < MAX_ACTIVE; s++) if (activePilots[s] == ri) return s;
-    return -1;
-}
+arduino_libs = os.path.join(
+    env.subst("$PROJECT_PACKAGES_DIR"),
+    "framework-arduinoespressif32",
+    "libraries"
+)
+if not os.path.isdir(arduino_libs):
+    Return()
 
-String rosterJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
-    for (int i = 0; i < rosterCount; i++) {
-        JsonObject o = arr.add<JsonObject>();
-        o["id"]         = i;
-        o["name"]       = roster[i].name;
-        o["yomi"]       = roster[i].yomi;
-        o["uid"]        = roster[i].hasUid ? [&](){
-                            char u[18]; uidToStr(roster[i].uid, u); return String(u);
-                          }() : String("");
-        o["activeSlot"] = activeSlotOf(i);
-        o["enter"]      = rosterCal[i].enterRssi;
-        o["exit"]       = rosterCal[i].exitRssi;
-    }
-    String s; serializeJson(doc, s); return s;
-}
+# 1. Add ALL bundled-library src/ dirs globally so cross-library #includes resolve.
+for lib_name in sorted(os.listdir(arduino_libs)):
+    lib_src = os.path.join(arduino_libs, lib_name, "src")
+    if os.path.isdir(lib_src):
+        env.Append(CPPPATH=[lib_src])
 
-String activeJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
-    for (int s = 0; s < MAX_ACTIVE; s++) {
-        JsonObject o = arr.add<JsonObject>();
-        int ri = activePilots[s];
-        o["slot"]      = s;
-        o["rosterIdx"] = ri;
-        o["name"]      = activeName(s);
-        o["yomi"]      = (ri >= 0 && ri < rosterCount) ? roster[ri].yomi : "";
-        if (ri >= 0 && ri < rosterCount) {
-            o["enter"] = rosterCal[ri].enterRssi;
-            o["exit"]  = rosterCal[ri].exitRssi;
-        }
-    }
-    String s; serializeJson(doc, s); return s;
-}
+# 2. Only compile and link Network for environments that use WiFi (web_node).
+if env.subst("$PIOENV") != "web_node":
+    Return()
 
-String lapsJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
-    for (int i = 0; i < lapCount; i++) {
-        JsonObject o = arr.add<JsonObject>();
-        int ri = laps[i].rosterIdx;
-        o["slot"]    = laps[i].slot;
-        o["name"]    = (ri >= 0 && ri < rosterCount) ? roster[ri].name : "---";
-        o["lapTime"] = laps[i].lapTimeMs;
-        o["ts"]      = laps[i].timestamp;
-    }
-    String s; serializeJson(doc, s); return s;
-}
+network_src = os.path.join(arduino_libs, "Network", "src")
+if not os.path.isdir(network_src):
+    Return()
 
-String scanJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
-    for (int i = 0; i < scanMacCount; i++) {
-        JsonObject o = arr.add<JsonObject>();
-        o["mac"] = scanMacs[i].mac;
-        o["rssi"] = scanMacs[i].rssi;
-        o["ts"]   = scanMacs[i].ts;
-    }
-    String s; serializeJson(doc, s); return s;
-}
+build_dir = env.subst("$BUILD_DIR")
+obj_dir   = os.path.join(build_dir, "NetworkExtra")
 
-void handleBody(AsyncWebServerRequest* req,
-                uint8_t* data, size_t len, size_t index, size_t total,
-                std::function<void(AsyncWebServerRequest*, const char*)> cb) {
-    struct BodyBuf { char* buf; size_t total; };
-    if (index == 0) req->_tempObject = new BodyBuf{ new char[total+1], total };
-    auto* bb = reinterpret_cast<BodyBuf*>(req->_tempObject);
-    if (!bb) return;
-    memcpy(bb->buf + index, data, len);
-    if (index + len == total) {
-        bb->buf[total] = '\0';
-        cb(req, bb->buf);
-        delete[] bb->buf; delete bb; req->_tempObject = nullptr;
-    }
-}
+network_objects = []
+for fname in sorted(os.listdir(network_src)):
+    if not fname.endswith(".cpp"):
+        continue
+    src = os.path.join(network_src, fname)
+    obj = os.path.join(obj_dir, fname.replace(".cpp", ".o"))
+    network_objects.append(env.Object(target=obj, source=src))
+
+network_lib = env.Library(
+    target=os.path.join(build_dir, "libNetworkExtra"),
+    source=network_objects,
+)
+env.Prepend(LIBS=[network_lib])
