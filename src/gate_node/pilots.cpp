@@ -49,37 +49,41 @@ bool anyPilotRegistered() {
     return false;
 }
 
-void macToStr(const uint8_t* mac, char* buf) {
+void uidToStr(const uint8_t* uid, char* buf) {
     snprintf(buf, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+             uid[0], uid[1], uid[2], uid[3], uid[4], uid[5]);
 }
 
-static struct ScanEntry { uint8_t mac[6]; uint32_t lastSent; } scanTable[MAX_SCAN_MACS];
+// Unknown UIDs (sniffers not yet registered as pilots): rate-limit and forward
+// to web_node as {"type":"scan","mac":"..."} — "mac" key kept for web_node compat.
+static struct ScanEntry { uint8_t uid[6]; uint32_t lastSent; } scanTable[MAX_SCAN_MACS];
 static int scanCount = 0;
 
-void reportScanMac(const uint8_t* mac, int8_t rssi) {
+void reportScanUid(const uint8_t* uid, int8_t rssi) {
     uint32_t now = millis();
     int slot = -1;
     for (int k = 0; k < scanCount; k++) {
-        if (memcmp(scanTable[k].mac, mac, 6) == 0) { slot = k; break; }
+        if (memcmp(scanTable[k].uid, uid, 6) == 0) { slot = k; break; }
     }
     if (slot < 0) {
         if (scanCount >= MAX_SCAN_MACS) return;
         slot = scanCount++;
-        memcpy(scanTable[slot].mac, mac, 6);
+        memcpy(scanTable[slot].uid, uid, 6);
         scanTable[slot].lastSent = 0;
     }
     if (now - scanTable[slot].lastSent < SCAN_INTERVAL_MS) return;
     scanTable[slot].lastSent = now;
 
-    char macStr[18];
-    macToStr(mac, macStr);
+    char uidStr[18];
+    uidToStr(uid, uidStr);
     char buf[96];
+    // Field is still "mac" because web_node gate_comm.cpp reads doc["mac"] for
+    // scan messages — do not change until Step 8 (web UI UID rename).
     snprintf(buf, sizeof(buf),
              R"({"type":"scan","mac":"%s","rssi":%d,"ts":%lu})",
-             macStr, (int)rssi, (unsigned long)now);
+             uidStr, (int)rssi, (unsigned long)now);
     Serial1.println(buf);
-    Serial.printf("[Gate] SCAN %s rssi=%d\n", macStr, (int)rssi);
+    Serial.printf("[Gate] SCAN uid=%s rssi=%d\n", uidStr, (int)rssi);
 }
 
 void resetScanTimers() {

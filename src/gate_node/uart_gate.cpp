@@ -8,12 +8,12 @@
 uint32_t gCooldownMs = COOLDOWN_MS;
 
 void sendLap(int idx, uint32_t lapMs) {
-    char macStr[18];
-    macToStr(pilots[idx].uid, macStr);
+    char uidStr[18];
+    uidToStr(pilots[idx].uid, uidStr);
     JsonDocument doc;
     doc["type"]   = "lap";
     doc["pilot"]  = idx;
-    doc["uid"]    = macStr;
+    doc["uid"]    = uidStr;
     doc["rssi"]   = pilots[idx].peakRssi;
     doc["ts"]     = pilots[idx].peakTime;
     doc["lapMs"]  = lapMs;
@@ -25,14 +25,14 @@ void sendLap(int idx, uint32_t lapMs) {
 }
 
 void sendRssi(int idx, uint32_t now) {
-    char macStr[18];
-    macToStr(pilots[idx].uid, macStr);
+    char uidStr[18];
+    uidToStr(pilots[idx].uid, uidStr);
     bool hasSignal = pilots[idx].lastPacketTime > 0 &&
                      (now - pilots[idx].lastPacketTime) < SIGNAL_LOST_MS;
     JsonDocument doc;
     doc["type"]     = "rssi";
     doc["pilot"]    = idx;
-    doc["uid"]      = macStr;
+    doc["uid"]      = uidStr;
     doc["rssi"]     = (int)pilots[idx].emaRssi;
     doc["raw"]      = pilots[idx].rawRssi;
     doc["crossing"] = pilots[idx].crossing;

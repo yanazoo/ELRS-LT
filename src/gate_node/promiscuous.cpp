@@ -1,12 +1,18 @@
 #include <Arduino.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_idf_version.h>
 #include "promiscuous.h"
 #include "config.h"
 
 QueueHandle_t packetQueue;
 
-static void onEspNowRecv(const uint8_t* src, const uint8_t* data, int len) {
+// ESP-IDF 5.0 changed the recv callback signature.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+static void onEspNowRecv(const esp_now_recv_info_t * /*info*/, const uint8_t *data, int len) {
+#else
+static void onEspNowRecv(const uint8_t * /*src*/, const uint8_t *data, int len) {
+#endif
     if (len != (int)sizeof(GateEP1Packet_t)) return;
     GateEP1Packet_t pkt;
     memcpy(&pkt, data, sizeof(pkt));
