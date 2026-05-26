@@ -4,6 +4,17 @@
 #include <espnow.h>
 #include <string.h>
 
+// GATE_ESP32_MAC is declared extern in config.h.
+// Define it from the gitignored secrets.h when present, otherwise fall back
+// to all-zeros so the firmware still links for the Step 1 bring-up build.
+// Copy secrets.example.h to secrets.h and fill in the real STA MAC of the
+// Gate ESP32 (TTGO T8) before ESP-NOW can actually reach the gate node.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  const uint8_t GATE_ESP32_MAC[6] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+#endif
+
 bool espnowBegin() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
