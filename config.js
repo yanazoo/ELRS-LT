@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>ESP-NOW Lap Timer</title>
+<style>
+:root {
+  --bg:#0d1117;--sf:#161b22;--sf2:#21262d;--bd:#30363d;
+  --tx:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--accent-d:#1f6feb;
+  --ok:#3fb950;--err:#f85149;--warn:#d29922;
+  --p0:#58a6ff;--p1:#f85149;--p2:#3fb950;--p3:#d29922;
+  --p0-bg:rgba(88,166,255,.12);--p1-bg:rgba(248,81,73,.12);
+  --p2-bg:rgba(63,185,80,.12);--p3-bg:rgba(210,153,34,.12);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;display:flex;flex-direction:column;font-size:14px}
+header{position:sticky;top:0;z-index:200;background:var(--sf);border-bottom:1px solid var(--bd);padding:8px 16px}
+.header-inner{display:flex;align-items:center;justify-content:space-between;max-width:1200px;margin:0 auto}
+.logo{display:flex;align-items:center;gap:8px}
+.logo h1{font-size:16px;color:var(--accent);font-weight:700}
+.ws-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.ws-dot.connected{background:var(--ok)}.ws-dot.disconnected{background:var(--err)}
+.tab-bar{display:flex;gap:3px}
+.tab-btn{flex:1;padding:6px 8px;border-radius:6px;font-size:12px;font-weight:600;background:transparent;color:var(--muted);border:1px solid transparent;cursor:pointer;transition:all .15s;white-space:nowrap}
+.tab-btn:hover{color:var(--tx);background:var(--sf2)}
+.tab-btn.active{background:var(--accent-d);color:#fff;border-color:var(--accent)}
+main{flex:1;max-width:1200px;margin:0 auto;width:100%;padding:16px 12px 32px}
+.tab-pane{display:none}.tab-pane.active{display:block}
+.section-title{font-size:18px;color:var(--accent);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bd)}
+.section-desc{color:var(--muted);font-size:12px;margin-bottom:12px;line-height:1.6}
+button{padding:8px 14px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;transition:filter .15s,opacity .15s}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:not(:disabled):hover{filter:brightness(1.15)}
+.btn-success{background:var(--ok);color:#000}.btn-danger{background:var(--err);color:#fff}
+.btn-secondary{background:var(--sf2);color:var(--tx);border:1px solid var(--bd)}
+.btn-save{background:var(--accent);color:#000;width:100%;margin-top:10px}
+.btn-voice{background:var(--sf2);color:var(--tx);border:1px solid var(--bd);min-width:120px}
+.btn-voice.on{background:var(--ok);color:#000;border-color:var(--ok)}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.card-title{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+
+/* ── Race controls ── */
+.race-controls{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:14px 12px;margin-bottom:12px;display:flex;flex-direction:column;align-items:center;gap:10px}
+#timer{font-size:44px;font-weight:bold;font-family:"Courier New",monospace;color:var(--accent);letter-spacing:3px}
+#timer.running{color:var(--ok)}
+.race-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.lap-count-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;flex-wrap:wrap;justify-content:center}
+.lap-count-row input[type="number"]{width:56px;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 6px;text-align:center;font-size:14px}
+
+/* ── Pilot race grid ── */
+.pilot-race-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.pilot-race-card{background:var(--sf);border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+.pilot-card-header{display:flex;align-items:center;gap:6px;padding:7px 10px;font-weight:700;font-size:13px}
+.pilot-card-header.p0{background:var(--p0-bg);border-bottom:2px solid var(--p0);color:var(--p0)}
+.pilot-card-header.p1{background:var(--p1-bg);border-bottom:2px solid var(--p1);color:var(--p1)}
+.pilot-card-header.p2{background:var(--p2-bg);border-bottom:2px solid var(--p2);color:var(--p2)}
+.pilot-card-header.p3{background:var(--p3-bg);border-bottom:2px solid var(--p3);color:var(--p3)}
+.p-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-lapcount{font-size:11px;font-weight:normal;color:var(--muted);white-space:nowrap}
+.crossing-badge{font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 6px;border-radius:3px;background:#333;color:var(--muted);display:none}
+.crossing-badge.active{display:inline-block;background:currentColor;color:#000}
+.rssi-mini-bar{display:flex;align-items:center;gap:5px;padding:3px 8px;background:var(--sf2)}
+.rssi-mini-label{font-size:9px;color:var(--muted);width:26px}
+.rssi-mini-track{flex:1;height:5px;background:var(--bd);border-radius:3px;overflow:hidden}
+.rssi-mini-fill{height:100%;width:0%;border-radius:3px;transition:width .05s}
+.p0 .rssi-mini-fill,.p0-fill{background:var(--p0)}.p1 .rssi-mini-fill,.p1-fill{background:var(--p1)}
+.p2 .rssi-mini-fill,.p2-fill{background:var(--p2)}.p3 .rssi-mini-fill,.p3-fill{background:var(--p3)}
+.rssi-mini-val{font-size:10px;color:var(--muted);min-width:36px;text-align:right}
+.pilot-best-row{display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--sf2);border-top:1px solid var(--bd)}
+.best-label{font-size:9px;color:var(--muted);width:26px}
+.pilot-best{font-size:14px;font-weight:700;color:var(--accent)}
+.pilot-delta{font-size:11px;font-weight:700;margin-left:auto}
+.pilot-delta.faster{color:var(--ok)}.pilot-delta.slower{color:var(--err)}
+.lap-table-wrap{overflow-x:auto;max-height:220px;overflow-y:auto}
+.lapTable{width:100%;border-collapse:collapse;font-size:11px}
+.lapTable thead th{background:var(--sf2);color:var(--muted);padding:3px 4px;text-align:center;font-weight:normal;font-size:10px;border-bottom:1px solid var(--bd);position:sticky;top:0}
+.lapTable tbody td{padding:3px 4px;text-align:center;border-bottom:1px solid var(--bd);color:var(--tx)}
+.lapTable tbody td.lap-time{font-size:13px;font-weight:700}
+.lapTable tbody tr:hover{background:var(--sf2)}
+.lapTable tbody tr.best-row td{color:var(--ok);font-weight:bold}
+@keyframes lapFlash{0%{background:rgba(255,255,255,.15)}100%{background:transparent}}
+.pilot-race-card.flash{animation:lapFlash .5s ease-out}
+
+/* ── Config / Roster ── */
+.search-row{display:flex;gap:8px;margin-bottom:10px}
+.search-input{flex:1;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:7px 10px;font-size:13px}
+.search-input:focus{outline:none;border-color:var(--accent)}
+.roster-list{max-height:420px;overflow-y:auto;border:1px solid var(--bd);border-radius:8px}
+.roster-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd);flex-wrap:wrap}
+.roster-item:last-child{border-bottom:none}
+.roster-item:hover{background:var(--sf2)}
+.roster-name{font-weight:600;font-size:13px;flex:1;min-width:80px}
+.roster-yomi{font-size:10px;color:var(--muted);display:block;font-weight:normal}
+.roster-mac{font-family:monospace;font-size:11px;color:var(--muted);min-width:120px}
+.active-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.active-badge.p0{background:var(--p0-bg);color:var(--p0);border:1px solid var(--p0)}
+.active-badge.p1{background:var(--p1-bg);color:var(--p1);border:1px solid var(--p1)}
+.active-badge.p2{background:var(--p2-bg);color:var(--p2);border:1px solid var(--p2)}
+.active-badge.p3{background:var(--p3-bg);color:var(--p3);border:1px solid var(--p3)}
+.online-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(63,185,80,.15);color:var(--ok);border:1px solid var(--ok);white-space:nowrap}
+.roster-actions{display:flex;gap:4px;flex-shrink:0;align-items:center}
+.roster-item input[type="text"]{background:var(--bg);border:1px solid var(--accent);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px}
+.ch-select{background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 5px;font-size:11px;cursor:pointer}
+
+/* ── Calib ── */
+.calib-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.calib-card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+.calib-header{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;font-weight:700;font-size:13px}
+.calib-header.p0{background:var(--p0-bg);border-bottom:2px solid var(--p0);color:var(--p0)}
+.calib-header.p1{background:var(--p1-bg);border-bottom:2px solid var(--p1);color:var(--p1)}
+.calib-header.p2{background:var(--p2-bg);border-bottom:2px solid var(--p2);color:var(--p2)}
+.calib-header.p3{background:var(--p3-bg);border-bottom:2px solid var(--p3);color:var(--p3)}
+.rssi-live-badge{font-size:11px;font-weight:normal}
+.rssi-live-badge strong{font-weight:700}
+.calib-card canvas{width:100%;height:130px;display:block;background:var(--bg)}
+.calib-sliders{padding:8px 12px;display:flex;flex-direction:column;gap:8px}
+
+.config-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:nowrap}
+.config-row label{font-size:9px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px;width:70px;flex-shrink:0}
+.slider-num{display:flex;align-items:center;gap:4px;flex:1;min-width:0}
+.slider-num input[type="range"]{flex:1;min-width:50px;accent-color:var(--accent);cursor:pointer}
+.slider-num input[type="number"]{width:50px;flex-shrink:0;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 3px;font-size:12px;text-align:center}
+.slider-num input[type="number"]:focus{outline:none;border-color:var(--accent)}
+.unit{font-size:10px;color:var(--muted);flex-shrink:0}
+
+/* ── Global config ── */
+.global-config-card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.global-title{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.voice-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.global-config-card .config-row label{width:110px;font-size:10px}
+
+/* ── Toggle switch ── */
+.toggle-sw{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;-webkit-user-select:none}
+.toggle-sw input[type="checkbox"]{position:absolute;opacity:0;width:0;height:0}
+.toggle-track{position:relative;width:44px;height:24px;background:var(--bd);border-radius:12px;transition:.2s;flex-shrink:0}
+.toggle-track::after{content:'';position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.2s}
+.toggle-sw input:checked + .toggle-track{background:var(--ok)}
+.toggle-sw input:checked + .toggle-track::after{transform:translateX(20px)}
+
+/* ── Footer / Status ── */
+footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;padding:10px;font-size:12px;color:var(--muted)}
+#statusMsg{flex:1;text-align:center;font-size:11px;color:var(--muted);opacity:0;transition:opacity .3s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+#statusMsg.show{opacity:1}
+#statusMsg.err{color:var(--err)}
+
+@media(max-width:900px){.pilot-race-grid{grid-template-columns:1fr 1fr}.calib-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){
+  .header-inner{flex-direction:column;gap:6px;align-items:flex-start}
+  .pilot-race-grid{grid-template-columns:1fr 1fr}.calib-grid{grid-template-columns:1fr 1fr}
+  #timer{font-size:32px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <h1>ESP-NOW Lap Timer</h1>
+      <span id="wsDot" class="ws-dot disconnected"></span>
+    </div>
+    <span id="statusMsg"></span>
+    <nav class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('race')">🏁 レース</button>
+      <button class="tab-btn"        onclick="switchTab('config')">⚙️ 設定</button>
+      <button class="tab-btn"        onclick="switchTab('calib')">📡 キャリブ</button>
+      <button class="tab-btn"        onclick="switchTab('sd')">💾 SD</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ═══════════════════════════ RACE ═══════════════════════════ -->
+<section id="pane-race" class="tab-pane active">
+  <div class="race-controls">
+    <div id="timer">00:00</div>
+    <div class="race-buttons">
+      <button id="btnStart" onclick="startRace()" class="btn-success">▶ スタート</button>
+      <button id="btnStop"  onclick="stopRace()"  class="btn-danger" disabled>■ ストップ</button>
+      <button id="btnClear" onclick="clearAllLaps()" class="btn-secondary">クリア</button>
+    </div>
+    <div class="lap-count-row">
+      <label>総周回数:</label>
+      <input type="number" id="totalLaps" min="0" max="99" value="0">
+      <span style="font-size:11px;color:var(--muted)">（0=無制限）</span>
+      <span style="color:var(--bd);margin:0 4px">｜</span>
+      <label class="toggle-sw">
+        <input type="checkbox" id="voiceToggle" onchange="toggleVoice()" checked>
+        <span class="toggle-track"></span>
+        🔊 音声
+      </label>
+    </div>
+  </div>
+  <div class="pilot-race-grid" id="pilotGrid"></div>
+</section>
+
+<!-- ═══════════════════════════ CONFIG ════════════════════════ -->
+<section id="pane-config" class="tab-pane">
+  <h2 class="section-title">設定</h2>
+
+  <div class="global-config-card">
+    <h3 class="global-title">📡 機体スキャン</h3>
+    <p class="section-desc">機体（XIAO ESP32-C3）の電源を入れると自動検出されます。名前を入力してパイロット情報に登録してください。入RSSI・出RSSIはスキャン時の電波強度から自動設定されます。</p>
+    <div id="scanList" style="min-height:32px"><span style="color:var(--muted);font-size:12px">スキャン待機中... 機体の電源を入れてください</span></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button onclick="scanRefresh(true)" class="btn-secondary" style="flex:1;font-size:12px">🔄 スキャン更新</button>
+      <button onclick="clearScan()" class="btn-secondary" style="flex:1;font-size:12px">🗑 リストをクリア</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="card-title" style="margin:0">👥 パイロット情報 <span id="rosterCountBadge" style="color:var(--muted);font-weight:normal"></span></div>
+      <button onclick="showAddForm()" class="btn-success" style="font-size:12px;padding:5px 12px">＋ 追加</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button onclick="autoAssignChannels()" class="btn-success" style="flex:1;font-size:12px;padding:5px 0">🤖 自動割当（電源ON順）</button>
+      <button onclick="clearChannelAssignments()" class="btn-secondary" style="flex:1;font-size:12px;padding:5px 0">✖ 全チャンネル解除</button>
+    </div>
+    <div class="search-row">
+      <input type="text" class="search-input" id="searchInput" placeholder="🔍 名前・MACで検索..." oninput="renderRoster()">
+    </div>
+    <div id="addForm" style="display:none;background:var(--sf2);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:8px">新規パイロット追加</div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">名前</label><input type="text" id="addName" placeholder="パイロット名" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">読み方</label><input type="text" id="addYomi" placeholder="パイロット名のよみかた" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">機体 MAC</label><input type="text" id="addMac" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" autocomplete="off" style="flex:1;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px">
+        <label style="width:70px;font-size:11px">入RSSI</label>
+        <input type="number" id="addEnter" value="-80" min="-120" max="0" style="width:70px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center">
+        <span style="font-size:12px;color:var(--muted)">dBm &nbsp; 出RSSI</span>
+        <input type="number" id="addExit" value="-90" min="-120" max="0" style="width:70px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center">
+        <span style="font-size:12px;color:var(--muted)">dBm</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button onclick="submitAdd()" class="btn-success" style="flex:1;font-size:12px">登録</button>
+        <button onclick="hideAddForm()" class="btn-secondary" style="flex:1;font-size:12px">キャンセル</button>
+      </div>
+    </div>
+    <div class="roster-list" id="rosterList"></div>
+  </div>
+
+  <div class="global-config-card" id="sdSection" style="display:none">
+    <h3 class="global-title">💾 SDカード</h3>
+    <p class="section-desc">パイロット情報をSDカードにバックアップ・復元します（CSV形式）。</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="sdBackup()" class="btn-secondary" style="flex:1">📥 SDバックアップ保存</button>
+      <button onclick="sdRestore()" class="btn-secondary" style="flex:1">📤 SDから復元</button>
+    </div>
+  </div>
+
+  <div class="global-config-card">
+    <h3 class="global-title">グローバル設定</h3>
+    <div style="padding:0">
+      <div class="config-row">
+        <label>初回ラップ</label>
+        <select id="lapModeSelect" onchange="saveGlobalConfig()" style="flex:1;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:6px 8px;font-size:13px">
+          <option value="holeshot">ホールショット（計測開始のみ）</option>
+          <option value="immediate">計測（スタートから計測）</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label>クールダウン</label>
+        <div class="slider-num">
+          <input type="number" id="cooldownInput" min="0.5" max="30" step="0.1" value="3.0"
+            onchange="saveGlobalConfig()" style="width:80px">
+          <span class="unit">s</span>
+        </div>
+      </div>
+      <div class="config-row">
+        <label>SDログ</label>
+        <select id="sdLogModeSelect" onchange="saveGlobalConfig()" style="flex:1;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:6px 8px;font-size:13px">
+          <option value="always">常に保存（毎レース新規ファイル）</option>
+          <option value="rotate">上書き（古い順に自動削除）</option>
+          <option value="off">書き込まない</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label>アナウンス</label>
+        <select id="announceMode" onchange="saveGlobalConfig()" style="flex:1;background:var(--sf2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:6px 8px;font-size:13px">
+          <option value="laptime">名前＆ラップタイム</option>
+          <option value="lap_laptime" selected>名前＆周回数＆ラップタイム</option>
+          <option value="beep">ビープ音のみ</option>
+          <option value="none">なし</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label>読み上げ速度</label>
+        <div class="slider-num">
+          <input type="range" id="speechRate" min="0.5" max="2.0" step="0.1" value="1.1"
+            oninput="document.getElementById('speechRateN').value=this.value;saveGlobalConfig()">
+          <input type="number" id="speechRateN" min="0.5" max="2.0" step="0.1" value="1.1"
+            onchange="document.getElementById('speechRate').value=Math.min(2,Math.max(0.5,+this.value));saveGlobalConfig()">
+        </div>
+      </div>
+    </div>
+    <div class="voice-row" style="align-items:center">
+      <label class="toggle-sw">
+        <input type="checkbox" id="voiceToggle2" onchange="toggleVoice()" checked>
+        <span class="toggle-track"></span>
+        🔊 音声 ON/OFF
+      </label>
+      <button onclick="testVoice()" class="btn-secondary">🔊 テスト</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ CALIB ════════════════════════ -->
+<section id="pane-calib" class="tab-pane">
+  <h2 class="section-title">キャリブレーション</h2>
+  <p class="section-desc">アクティブパイロットの RSSI リアルタイム波形と検知閾値。Enter &gt; Exit になるよう設定します。</p>
+  <div class="calib-grid" id="calibGrid"></div>
+</section>
+
+<!-- ═══════════════════════════ SD ════════════════════════════ -->
+<section id="pane-sd" class="tab-pane">
+  <h2 class="section-title">💾 SDカード — ファイルブラウザ</h2>
+  <div id="sdTabStatus"><p style="color:var(--muted);font-size:12px">状態を確認中...</p></div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <button onclick="refreshSdFiles()" class="btn-secondary" style="flex:1">🔄 ファイル一覧を更新</button>
+  </div>
+  <div id="sdFileListWrap">
+    <p style="color:var(--muted);font-size:12px">「ファイル一覧を更新」を押してください</p>
+  </div>
+</section>
+
+</main>
+<footer><p>ESP-NOW Lap Timer — MAX 20 pilots</p></footer>
+
+<script src="/js/globals.js"></script>
+<script src="/js/audio.js"></script>
+<script src="/js/race.js"></script>
+<script src="/js/config.js"></script>
+<script src="/js/calib.js"></script>
+<script src="/js/sd.js"></script>
+<script src="/js/ws.js"></script>
+</body>
+</html>
