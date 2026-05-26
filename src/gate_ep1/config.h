@@ -25,7 +25,8 @@
 // A solid LED with the TX off = the unit is sitting in bootloader mode.
 
 // ---- ELRS / FHSS ----
-#define FHSS_CHANNEL_COUNT   80     // 2.4GHz ELRS; confirm against ELRS source
+#define FHSS_CHANNEL_COUNT   80                          // 2.4GHz ISM unique channels
+#define FHSS_SEQUENCE_LEN    (FHSS_CHANNEL_COUNT * 3)   // 240: 3 complete blocks per ELRS
 #define ELRS_SLOT_US         4000   // 250Hz default; adjust per packet rate
 #define SX_SWITCH_US         1000   // approx SX1280 frequency switch time
 
