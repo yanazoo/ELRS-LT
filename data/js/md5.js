@@ -1,10 +1,11 @@
 /* md5.js — RFC 1321 MD5, public domain (based on Joseph Myers).
- * Exposes window.phraseToUid(phrase) -> "AA:BB:CC:DD:EE:FF" (first 6 bytes of MD5).
- * Matches: Python hashlib.md5(phrase.encode('utf-8')).digest()[:6]
- * Test vectors:
- *   "yanazoo" -> 45:7C:D7:AE:EB:B1
- *   "test"    -> 09:8F:6B:CD:46:21
- *   "hello"   -> 5D:41:40:2A:BC:4B */
+ * Exposes window.phraseToUid(phrase) -> "AA:BB:CC:DD:EE:FF"
+ *
+ * Matches ExpressLRS UID derivation:
+ *   MD5( -DMY_BINDING_PHRASE="<phrase>" ).digest()[:6]
+ * Test vectors (verified against ELRS Python configurator):
+ *   "yanazoo" -> FB:26:B8:4A:DD:EA  (251,38,184,74,221,234)
+ */
 (function () {
 'use strict';
 
@@ -40,9 +41,8 @@ function md5block(s, M) {
   s[0]=safeAdd(a,s[0]); s[1]=safeAdd(b,s[1]); s[2]=safeAdd(c,s[2]); s[3]=safeAdd(d,s[3]);
 }
 
-window.phraseToUid = function phraseToUid(phrase) {
-  if (!phrase) return '';
-  var utf8  = new TextEncoder().encode(phrase);
+function md5Bytes(input) {
+  var utf8  = new TextEncoder().encode(input);
   var len   = utf8.length;
   var bytes = Array.from(utf8);
   bytes.push(0x80);
@@ -58,9 +58,17 @@ window.phraseToUid = function phraseToUid(phrase) {
     md5block(st, M);
   }
 
-  var uid = [];
-  for (var i = 0; i < 6; i++)
-    uid.push((st[i >> 2] >>> ((i & 3) * 8)) & 0xff);
+  var out = [];
+  for (var i = 0; i < 16; i++)
+    out.push((st[i >> 2] >>> ((i & 3) * 8)) & 0xff);
+  return out;
+}
+
+window.phraseToUid = function phraseToUid(phrase) {
+  if (!phrase) return '';
+  var wrapped = '-DMY_BINDING_PHRASE="' + phrase + '"';
+  var bytes = md5Bytes(wrapped);
+  var uid = bytes.slice(0, 6);
   return uid.map(function(b){ return b.toString(16).padStart(2,'0').toUpperCase(); }).join(':');
 };
 

@@ -36,11 +36,19 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
         for (int i = 0; i < 6; i++) if (b->uid[i]) { hasUid = true; break; }
         if (hasUid) fmtMac(b->uid, uidStr);
 
+        Serial.printf("[Gate] beacon from %s state=%u uid=%s\n",
+                      macStr, (unsigned)b->state, uidStr[0] ? uidStr : "(none)");
+
         char json[100];
         snprintf(json, sizeof(json),
                  R"({"type":"ep1_hello","mac":"%s","state":%u,"uid":"%s"})",
                  macStr, (unsigned)b->state, uidStr);
         Serial1.println(json);
+
+    } else {
+        // Unknown packet size — log so we can see if EP1 is reaching us at all
+        Serial.printf("[Gate] unknown ESP-NOW pkt from %02X:%02X:%02X:%02X:%02X:%02X len=%d\n",
+                      srcMac[0], srcMac[1], srcMac[2], srcMac[3], srcMac[4], srcMac[5], len);
     }
 }
 

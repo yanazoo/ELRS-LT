@@ -63,7 +63,7 @@ function onMsg(d){
     var s=d.pilot;if(s<0||s>=N)return;
     var p=slots[s];
     var prevCrossing=p.crossing;
-    p.rssiSignal=d.signal!==false;
+    p.rssiSignal=(d.signal===true);  // strict: anything other than true is "no signal"
     p.rssi=p.rssiSignal?(d.rssi!==undefined?d.rssi:p.rssi):-120;
     p.crossing=p.rssiSignal&&(d.crossing!==undefined?d.crossing:p.crossing);
     if(d.name&&d.name!=='---')p.name=d.name;

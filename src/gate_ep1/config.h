@@ -37,6 +37,9 @@
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
+// ---- ESP-NOW channel (must match Gate Node ESPNOW_CHANNEL) ----
+#define ESPNOW_CHANNEL       1
+
 // ---- Identity ----
 typedef struct { uint8_t uid[6]; bool valid; } SnifferIdentity_t;
 
@@ -64,6 +67,6 @@ typedef struct __attribute__((packed)) {
     uint8_t uid[6];  // ELRS bind UID to follow (all-zero = clear/stop)
 } GateProvisionPacket_t;     // 7 bytes
 
-// Gate ESP32 ESP-NOW peer MAC. Set to your TTGO T8 STA MAC.
-// Keep the real value in secrets.h (gitignored).
-extern const uint8_t GATE_ESP32_MAC[6];
+// NOTE: EP1 no longer needs the Gate ESP32 MAC address. Beacons and RSSI
+// reports are sent to broadcast (FF:FF:FF:FF:FF:FF); the Gate Node learns
+// each EP1's MAC from the receive callback's src_addr.

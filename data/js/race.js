@@ -40,6 +40,7 @@ function buildRaceCards(){
     d.id='rc-'+p.id;d.className='pilot-race-card';
     d.innerHTML=
       '<div class="pilot-card-header '+PCLS[p.id]+'">'
+        +'<span class="conn-dot" id="rcConn'+p.id+'" title="EP1 接続状態"></span>'
         +'<span class="p-name" id="rcName'+p.id+'">'+esc(p.name==='---'?'Ch'+(p.id+1):p.name)+'</span>'
         +'<span class="crossing-badge" id="rcBadge'+p.id+'">CROSSING</span>'
         +'<span class="p-lapcount" id="rcLaps'+p.id+'"></span>'
@@ -69,7 +70,8 @@ function buildRaceCards(){
       best : document.getElementById('rcBest'+p.id),
       badge: document.getElementById('rcBadge'+p.id),
       delta: document.getElementById('rcDelta'+p.id),
-      body : document.getElementById('lapBody'+p.id)
+      body : document.getElementById('lapBody'+p.id),
+      conn : document.getElementById('rcConn'+p.id)
     };
   });
 }
@@ -90,6 +92,14 @@ function updateRaceCard(p){
     if(p.crossing){e.badge.style.display='inline-block';e.badge.style.color=PCOLORS[p.id];}
     else{e.badge.style.display='none';}
     e._cross=p.crossing;
+  }
+  // Connection state: card dims and dot turns red when this slot has no EP1 signal.
+  // "Connected" means we're receiving RSSI packets from an EP1 right now.
+  var connected=!!p.rssiSignal;
+  if(e._conn!==connected){
+    e.card.classList.toggle('no-signal',!connected);
+    if(e.conn)e.conn.classList.toggle('on',connected);
+    e._conn=connected;
   }
 }
 
