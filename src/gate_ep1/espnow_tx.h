@@ -1,9 +1,21 @@
-// espnow_tx.h - send RSSI reports from sniffer to Gate ESP32
+// espnow_tx.h - ESP-NOW send/receive for EP1 sniffer (ESP8285)
 #pragma once
 #include "config.h"
 
-// Init ESP-NOW (ESP8285) and register the Gate ESP32 as a peer.
+// Callback invoked when a GateProvisionPacket_t arrives from Gate Node.
+// uid: 6-byte ELRS UID to follow (all-zero = clear).
+typedef void (*ProvisionCallback_t)(const uint8_t uid[6]);
+
+// Init ESP-NOW (COMBO role: send RSSI/beacons + receive provision).
 bool espnowBegin();
 
-// Send one RSSI report. Non-blocking; drops silently on failure.
+// Register callback for incoming provision packets from Gate Node.
+void espnowSetProvisionCallback(ProvisionCallback_t cb);
+
+// Send RSSI report to Gate Node. Non-blocking; drops silently on failure.
 void espnowSendRssi(const uint8_t uid[6], int8_t rssi, uint8_t lq, uint32_t ts);
+
+// Send presence beacon to Gate Node every ~5 s so Gate Node can discover
+// this EP1's MAC and relay it to the Web UI for node assignment.
+// state: 0=PROVISION 1=SCAN 2=FOLLOW
+void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state);

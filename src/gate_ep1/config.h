@@ -38,18 +38,31 @@
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
 // ---- Identity ----
-// 6-byte ELRS bind UID this sniffer follows. Provisioned at runtime
-// (UART or ESP-NOW from web node), NOT hardcoded. See secrets.example.h.
 typedef struct { uint8_t uid[6]; bool valid; } SnifferIdentity_t;
 
-// ---- ESP-NOW packet: Gate EP1 -> Gate ESP32 ----
+// ---- ESP-NOW packet: EP1 -> Gate ESP32 (RSSI report, 12 bytes) ----
 // Keep in sync with the matching struct in src/gate_node/promiscuous.*
 typedef struct __attribute__((packed)) {
     uint8_t  pilot_uid[6];   // which pilot's EP1 this RSSI belongs to
     int8_t   rssi;           // measured RSSI (dBm)
-    uint8_t  lq;             // link quality 0-100 (optional, 0 if unused)
+    uint8_t  lq;             // link quality 0-100
     uint32_t ts;             // sniffer millis() timestamp
-} GateEP1Packet_t;
+} GateEP1Packet_t;           // 12 bytes
+
+// ---- ESP-NOW packet: EP1 -> Gate ESP32 (presence beacon, 8 bytes) ----
+#define EP1_BEACON_MAGIC  0xA5
+typedef struct __attribute__((packed)) {
+    uint8_t magic;   // EP1_BEACON_MAGIC = 0xA5
+    uint8_t state;   // 0=PROVISION 1=SCAN 2=FOLLOW
+    uint8_t uid[6];  // current UID (all-zero if not provisioned)
+} GateEP1BeaconPacket_t;     // 8 bytes
+
+// ---- ESP-NOW packet: Gate ESP32 -> EP1 (provisioning, 7 bytes) ----
+#define GATE_PROV_MAGIC   0xB1
+typedef struct __attribute__((packed)) {
+    uint8_t magic;   // GATE_PROV_MAGIC = 0xB1
+    uint8_t uid[6];  // ELRS bind UID to follow (all-zero = clear/stop)
+} GateProvisionPacket_t;     // 7 bytes
 
 // Gate ESP32 ESP-NOW peer MAC. Set to your TTGO T8 STA MAC.
 // Keep the real value in secrets.h (gitignored).

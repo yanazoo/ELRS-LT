@@ -212,6 +212,12 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
     </div>
   </div>
 
+  <div class="global-config-card">
+    <h3 class="global-title">📻 EP1 ノード</h3>
+    <p class="section-desc">ゲートに接続された EP1 スニファーが自動検出されます。パイロット登録時にノードを選択すると、バインドフレーズから計算した UID を ESP-NOW 経由で EP1 へ書き込み、スキャンを開始します。</p>
+    <div id="ep1List"><span style="color:var(--muted);font-size:12px">EP1 ノードを待機中... （EP1の電源を入れてください）</span></div>
+  </div>
+
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div class="card-title" style="margin:0">👥 パイロット情報 <span id="rosterCountBadge" style="color:var(--muted);font-weight:normal"></span></div>
@@ -228,7 +234,9 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
       <div style="font-size:12px;color:var(--accent);font-weight:600;margin-bottom:8px">新規パイロット追加</div>
       <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">名前</label><input type="text" id="addName" placeholder="パイロット名" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
       <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">読み方</label><input type="text" id="addYomi" placeholder="パイロット名のよみかた" maxlength="20" autocomplete="off" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">バインドフレーズ</label><input type="text" id="addPhrase" placeholder="フレーズから UID を自動計算" autocomplete="off" oninput="onAddPhraseInput()" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
       <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">バインド UID</label><input type="text" id="addUid" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" autocomplete="off" style="flex:1;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"></div>
+      <div class="config-row" style="gap:8px"><label style="width:70px;font-size:11px">EP1 ノード</label><select id="addEp1Mac" style="flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px"><option value="">なし</option></select></div>
       <div class="config-row" style="gap:8px">
         <label style="width:70px;font-size:11px">入RSSI</label>
         <input type="number" id="addEnter" value="-80" min="-120" max="0" style="width:70px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center">
@@ -331,6 +339,7 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
 </main>
 <footer><p>ESP-NOW Lap Timer — MAX 20 pilots</p></footer>
 
+<script src="/js/md5.js"></script>
 <script src="/js/globals.js"></script>
 <script src="/js/audio.js"></script>
 <script src="/js/race.js"></script>

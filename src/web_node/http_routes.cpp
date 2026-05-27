@@ -408,6 +408,28 @@ void registerHttpRoutes() {
                 });
         });
 
+    // ── POST /api/ep1/provision ───────────────────────────────────────────────
+    server.on("/api/ep1/provision", HTTP_POST, [](AsyncWebServerRequest*){},
+        nullptr,
+        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t idx, size_t total){
+            handleBody(req, data, len, idx, total,
+                [](AsyncWebServerRequest* req2, const char* body){
+                    JsonDocument doc;
+                    if (deserializeJson(doc, body) != DeserializationError::Ok)
+                        { req2->send(400,"application/json",R"({"error":"bad json"})"); return; }
+                    const char* mac = doc["mac"] | "";
+                    const char* uid = doc["uid"] | "";
+                    if (strlen(mac) != 17 || strlen(uid) != 17)
+                        { req2->send(400,"application/json",R"({"error":"bad mac/uid"})"); return; }
+                    char buf[96];
+                    snprintf(buf, sizeof(buf),
+                             R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
+                             mac, uid);
+                    Serial1.println(buf);
+                    req2->send(200,"application/json",R"({"ok":true})");
+                });
+        });
+
     // ── Static files (last — after all API and captive portal routes) ──────────
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache");
 

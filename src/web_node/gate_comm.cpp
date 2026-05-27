@@ -129,6 +129,10 @@ void processGateLine(const String& line) {
         wsText(line);
         return;
     }
+    if (strcmp(type, "ep1_hello") == 0) {
+        wsText(line);
+        return;
+    }
     if (strcmp(type, "scan") == 0) {
         const char* mac = doc["mac"] | "";
         if (strlen(mac) == 17) updateScanMac(mac, doc["rssi"] | -120);

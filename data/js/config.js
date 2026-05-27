@@ -112,12 +112,57 @@ async function onChSelectChange(sel){
   }catch(e){toast('⚠️ 接続エラー');}
 }
 
-function showAddForm(){document.getElementById('addForm').style.display='block';document.getElementById('addName').focus();}
+var EP1_STATE_NAMES=['待機中(未設定)','スキャン中','追跡中'];
+
+function updateEp1List(){
+  var el=document.getElementById('ep1List');
+  var sel=document.getElementById('addEp1Mac');
+  var now=Date.now();
+  var macs=Object.keys(ep1Nodes).filter(function(m){return now-ep1Nodes[m].lastSeenAt<30000;});
+  if(!macs.length){
+    if(el)el.innerHTML='<span style="color:var(--muted);font-size:12px">EP1 ノードを待機中... （EP1の電源を入れてください）</span>';
+    if(sel)sel.innerHTML='<option value="">なし</option>';
+    return;
+  }
+  if(el){
+    el.innerHTML=macs.map(function(mac,i){
+      var n=ep1Nodes[mac];
+      var stName=EP1_STATE_NAMES[n.state]||'不明';
+      var uidLine=n.uid?'<span style="font-family:monospace;font-size:10px;color:var(--muted);margin-left:6px">'+esc(n.uid)+'</span>':'';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'
+        +'<span style="font-weight:700;color:var(--accent);font-size:13px">#'+(i+1)+'</span>'
+        +'<span style="font-family:monospace;font-size:12px">'+esc(mac)+'</span>'
+        +'<span style="font-size:11px;color:var(--ok)">'+esc(stName)+'</span>'
+        +uidLine+'</div>';
+    }).join('');
+  }
+  if(sel){
+    var prev=sel.value;
+    sel.innerHTML='<option value="">なし</option>'
+      +macs.map(function(mac,i){
+        var stName=EP1_STATE_NAMES[ep1Nodes[mac].state]||'不明';
+        return '<option value="'+esc(mac)+'"'+(prev===mac?' selected':'')+'>EP1 #'+(i+1)+' — '+esc(stName)+'</option>';
+      }).join('');
+  }
+}
+
+function onAddPhraseInput(){
+  var phrase=document.getElementById('addPhrase').value;
+  if(!phrase)return;
+  if(typeof phraseToUid!=='function')return;
+  var uid=phraseToUid(phrase);
+  var el=document.getElementById('addUid');
+  if(el)el.value=uid;
+}
+
+function showAddForm(){document.getElementById('addForm').style.display='block';updateEp1List();document.getElementById('addName').focus();}
 function hideAddForm(){
   document.getElementById('addForm').style.display='none';
   document.getElementById('addName').value='';
   document.getElementById('addYomi').value='';
+  document.getElementById('addPhrase').value='';
   document.getElementById('addUid').value='';
+  document.getElementById('addEp1Mac').value='';
   document.getElementById('addEnter').value='-80';
   document.getElementById('addExit').value='-90';
 }
@@ -126,6 +171,7 @@ async function submitAdd(){
   var name=document.getElementById('addName').value.trim();
   var yomi=document.getElementById('addYomi').value.trim();
   var uid=document.getElementById('addUid').value.trim().toUpperCase();
+  var ep1Mac=document.getElementById('addEp1Mac').value;
   var enter=parseInt(document.getElementById('addEnter').value)||(-80);
   var exit_=parseInt(document.getElementById('addExit').value)||(-90);
   if(!name){toast('⚠️ 名前を入力してください');return;}
@@ -136,7 +182,12 @@ async function submitAdd(){
     if(r.ok){
       var body=await r.json();
       await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:body.id,enter,exit:exit_})});
-      await loadRoster();hideAddForm();toast('✓ '+name+' を登録しました');
+      if(ep1Mac&&validUid){
+        await fetch('/api/ep1/provision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:ep1Mac,uid:uid})});
+        await loadRoster();hideAddForm();toast('✓ '+name+' を登録・EP1 へプロビジョニングしました');
+      }else{
+        await loadRoster();hideAddForm();toast('✓ '+name+' を登録しました');
+      }
     }
     else toast('⚠️ 登録エラー');
   }catch(e){toast('⚠️ 接続エラー');}

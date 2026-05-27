@@ -149,6 +149,11 @@ function onMsg(d){
     }else{toast('削除失敗: '+d.path);}
     return;
   }
+  if(d.type==='ep1_hello'){
+    ep1Nodes[d.mac]={mac:d.mac,state:d.state,uid:d.uid||'',lastSeenAt:Date.now()};
+    if(typeof updateEp1List==='function')updateEp1List();
+    return;
+  }
 }
 
 async function loadRoster(){
