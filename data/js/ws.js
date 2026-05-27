@@ -116,12 +116,23 @@ function onMsg(d){
       document.getElementById('lapBody'+p.id).innerHTML='';
       document.getElementById('rcDelta'+p.id).textContent='';
       updateRaceCard(p);});
+    if(editingRosterId!==null){clearTimeout(_editSaveTimer);editingRosterId=null;}
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
     return;
   }
   if(d.type==='race_resume'){
-    raceRunning=true;raceStarted=true;setBtns(true);resumeTimer();return;
+    raceRunning=true;raceStarted=true;setBtns(true);resumeTimer();
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
+    return;
   }
-  if(d.type==='race_stop'){raceRunning=false;setBtns(false);stopTimer();return;}
+  if(d.type==='race_stop'){
+    raceRunning=false;setBtns(false);stopTimer();
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
+    return;
+  }
   if(d.type==='sd_status'){updateSdSection(d.present);return;}
   if(d.type==='sd_restore_done'){
     toast('✅ SDから'+((d.pilots&&JSON.parse(d.pilots).length)||'?')+'人分を復元しました',3000);

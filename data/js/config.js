@@ -53,33 +53,32 @@ function renderRoster(){
       var editSlot=activeSlotsLocal.indexOf(r.id);
       var editEp1=editSlot>=0?slotEp1Macs[editSlot]:'';
       var ep1Hint=editEp1?'<span style="color:var(--ok);font-size:9px">→ Ch'+(editSlot+1)+' EP1 自動書込</span>':'';
+      var sid=r.id;
       item.innerHTML=
         '<div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:4px">'
-          +'<input type="text" id="editName" value="'+esc(r.name)+'" maxlength="20" placeholder="パイロット名" autocomplete="off" style="background:var(--bg);border:1px solid var(--accent);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px;width:100%">'
-          +'<input type="text" id="editYomi" value="'+esc(r.yomi||'')+'" maxlength="20" placeholder="読み方（よみかた）" autocomplete="off" style="background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:11px;width:100%">'
+          +'<input type="text" id="editName" value="'+esc(r.name)+'" maxlength="20" placeholder="パイロット名" autocomplete="off" oninput="scheduleEditSave('+sid+')" style="background:var(--bg);border:1px solid var(--accent);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px;width:100%">'
+          +'<input type="text" id="editYomi" value="'+esc(r.yomi||'')+'" maxlength="20" placeholder="読み方（よみかた）" autocomplete="off" oninput="scheduleEditSave('+sid+')" style="background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:11px;width:100%">'
         +'</div>'
         +'<div style="display:flex;flex-direction:column;gap:2px">'
-          +'<input type="text" id="editPhrase" placeholder="バインドフレーズ" autocomplete="off" oninput="onEditPhraseInput()" style="width:130px;background:var(--bg);border:1px solid var(--bd);color:var(--muted);border-radius:5px;padding:2px 7px;font-size:10px" title="入力でUIDを自動計算">'
-          +'<div style="display:flex;align-items:center;gap:3px">'
-            +'<input type="text" id="editUid" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px" autocomplete="off">'
-          +'</div>'
+          +'<input type="text" id="editPhrase" placeholder="バインドフレーズ" autocomplete="off" oninput="onEditPhraseInput();scheduleEditSave('+sid+')" style="width:130px;background:var(--bg);border:1px solid var(--bd);color:var(--muted);border-radius:5px;padding:2px 7px;font-size:10px" title="入力でUIDを自動計算">'
+          +'<input type="text" id="editUid" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" oninput="scheduleEditSave('+sid+')" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px">'
           +ep1Hint
         +'</div>'
         +'<div style="display:flex;flex-direction:column;gap:2px">'
           +'<div style="display:flex;align-items:center;gap:3px">'
             +'<label style="color:var(--muted);font-size:10px;width:20px">入</label>'
-            +'<input type="number" id="editEnter" value="'+enterVal+'" min="-120" max="0" style="width:58px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:2px 4px;font-size:11px;text-align:center">'
+            +'<input type="number" id="editEnter" value="'+enterVal+'" min="-120" max="0" oninput="scheduleEditSave('+sid+')" style="width:58px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:2px 4px;font-size:11px;text-align:center">'
             +'<span style="color:var(--muted);font-size:10px">dBm</span>'
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:3px">'
             +'<label style="color:var(--muted);font-size:10px;width:20px">出</label>'
-            +'<input type="number" id="editExit" value="'+exitVal+'" min="-120" max="0" style="width:58px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:2px 4px;font-size:11px;text-align:center">'
+            +'<input type="number" id="editExit" value="'+exitVal+'" min="-120" max="0" oninput="scheduleEditSave('+sid+')" style="width:58px;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:2px 4px;font-size:11px;text-align:center">'
             +'<span style="color:var(--muted);font-size:10px">dBm</span>'
           +'</div>'
         +'</div>'
-        +'<div class="roster-actions">'
-          +'<button onclick="submitEdit('+r.id+')" class="btn-success" style="font-size:11px;padding:3px 9px">保存</button>'
+        +'<div class="roster-actions" style="flex-direction:column;align-items:flex-end;gap:2px">'
           +'<button onclick="cancelEdit()" class="btn-secondary" style="font-size:11px;padding:3px 9px">×</button>'
+          +'<span id="editSaveHint" style="font-size:9px;color:var(--muted);white-space:nowrap"></span>'
         +'</div>';
     } else {
       var chOpts='<option value="-1"'+(r.activeSlot<0?' selected':'')+'>未割当</option>';
@@ -94,11 +93,12 @@ function renderRoster(){
         +'<span class="roster-uid">'+(r.uid||'<span style="color:var(--err)">UID未設定</span>')+'</span>'
         +onlineMark+activeBadge
         +'<div class="roster-actions">'
-          +'<select class="ch-select" data-rid="'+r.id+'" onchange="onChSelectChange(this)">'
-            +chOpts
-          +'</select>'
-          +'<button onclick="startEdit('+r.id+')" class="btn-secondary" style="font-size:11px;padding:3px 8px">編集</button>'
-          +'<button onclick="deleteRosterPilot('+r.id+')" class="btn-danger" style="font-size:11px;padding:3px 8px">削除</button>'
+          +(raceRunning
+            ?'<span style="color:var(--muted);font-size:10px">計測中</span>'
+            :'<select class="ch-select" data-rid="'+r.id+'" onchange="onChSelectChange(this)">'+chOpts+'</select>'
+              +'<button onclick="startEdit('+r.id+')" class="btn-secondary" style="font-size:11px;padding:3px 8px">編集</button>'
+          )
+          +'<button onclick="deleteRosterPilot('+r.id+')" class="btn-danger" style="font-size:11px;padding:3px 8px"'+(raceRunning?' disabled':'')+'>削除</button>'
         +'</div>';
     }
     list.appendChild(item);
@@ -106,6 +106,7 @@ function renderRoster(){
 }
 
 async function onChSelectChange(sel){
+  if(raceRunning){toast('⚠️ 計測中はチャンネル変更できません');return;}
   var rid=parseInt(sel.dataset.rid);
   var newCh=parseInt(sel.value);
   var newSlots=activeSlotsLocal.slice();
@@ -156,18 +157,21 @@ function updateEp1List(){
       +[0,1,2,3].map(function(s){
         return '<option value="'+s+'"'+(curSlot===s?' selected':'')+'>Ch'+(s+1)+'</option>';
       }).join('');
+    var slotCtrl=raceRunning
+      ?'<span style="color:var(--muted);font-size:10px;margin-left:auto">計測中</span>'
+      :'<select onchange="onEp1SlotChange(\''+mac+'\',this)" style="margin-left:auto;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:3px 6px;font-size:12px">'+slotOpts+'</select>';
     return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">'
       +'<span style="font-weight:700;color:var(--accent);font-size:13px">#'+(i+1)+'</span>'
       +'<span style="font-family:monospace;font-size:12px">'+esc(mac)+'</span>'
       +'<span style="font-size:11px;color:var(--ok)">'+esc(stName)+'</span>'
       +uidLine
-      +'<select onchange="onEp1SlotChange(\''+mac+'\',this)" style="margin-left:auto;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:3px 6px;font-size:12px">'
-      +slotOpts+'</select>'
+      +slotCtrl
       +'</div>';
   }).join('');
 }
 
 async function onEp1SlotChange(mac,selEl){
+  if(raceRunning){toast('⚠️ 計測中は EP1 ノードの割当変更できません');return;}
   var newSlot=parseInt(selEl.value);
   var arr=slotEp1Macs.slice();
   for(var i=0;i<N;i++)if(arr[i]===mac)arr[i]='';
@@ -246,29 +250,54 @@ async function submitAdd(){
 }
 
 function startEdit(id){editingRosterId=id;renderRoster();setTimeout(()=>{var el=document.getElementById('editName');if(el)el.focus();},0);}
-function cancelEdit(){editingRosterId=null;renderRoster();}
+function cancelEdit(){clearTimeout(_editSaveTimer);editingRosterId=null;renderRoster();}
 
-async function submitEdit(id){
-  var name=document.getElementById('editName').value.trim();
-  var yomi=document.getElementById('editYomi').value.trim();
-  var uid=document.getElementById('editUid').value.trim().toUpperCase();
-  var enter=parseInt(document.getElementById('editEnter').value)||(-80);
-  var exit_=parseInt(document.getElementById('editExit').value)||(-90);
-  if(!name){toast('⚠️ 名前を入力してください');return;}
+var _editSaveTimer=null;
+function scheduleEditSave(id){
+  clearTimeout(_editSaveTimer);
+  var h=document.getElementById('editSaveHint');
+  if(h){h.textContent='編集中...';h.style.color='var(--muted)';}
+  _editSaveTimer=setTimeout(function(){doAutoSaveEdit(id);},800);
+}
+
+async function doAutoSaveEdit(id){
+  if(raceRunning){
+    var h=document.getElementById('editSaveHint');
+    if(h){h.textContent='⚠ 計測中は保存不可';h.style.color='var(--err)';}
+    return;
+  }
+  var nameEl=document.getElementById('editName');
+  if(!nameEl)return;
+  var name=nameEl.value.trim();
+  var yomi=(document.getElementById('editYomi')||{}).value||'';
+  yomi=yomi.trim();
+  var uid=((document.getElementById('editUid')||{}).value||'').trim().toUpperCase();
+  var enter=parseInt((document.getElementById('editEnter')||{}).value)||(-80);
+  var exit_=parseInt((document.getElementById('editExit')||{}).value)||(-90);
+  if(!name)return;
   var validUid=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(uid);
-  if(uid&&!validUid){toast('⚠️ UID形式: AA:BB:CC:DD:EE:FF');return;}
+  if(uid&&!validUid){
+    var h=document.getElementById('editSaveHint');
+    if(h){h.textContent='⚠ UID形式エラー';h.style.color='var(--err)';}
+    return;
+  }
   var slot=activeSlotsLocal.indexOf(id);
   var ep1Mac=slot>=0?slotEp1Macs[slot]:'';
   try{
     var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name,yomi,uid:validUid?uid:''})});
-    if(r.ok){
-      await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,enter,exit:exit_})});
-      editingRosterId=null;await loadRoster();applyActiveToSlots();buildRaceCards();
-      if(ep1Mac&&validUid)toast('✓ 更新 + Ch'+(slot+1)+' EP1 へ即時プロビジョニング済み');
-      else toast('✓ 更新しました');
+    if(!r.ok){
+      var h=document.getElementById('editSaveHint');
+      if(h){h.textContent='⚠ 保存失敗';h.style.color='var(--err)';}
+      return;
     }
-    else toast('⚠️ 更新エラー');
-  }catch(e){toast('⚠️ 接続エラー');}
+    await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,enter,exit:exit_})});
+    var h=document.getElementById('editSaveHint');
+    if(h){h.textContent='✓ 保存済み';h.style.color='var(--ok)';}
+    if(ep1Mac&&validUid)toast('✓ Ch'+(slot+1)+' EP1 へプロビジョニング済み',1500);
+  }catch(e){
+    var h=document.getElementById('editSaveHint');
+    if(h){h.textContent='⚠ 保存失敗';h.style.color='var(--err)';}
+  }
 }
 
 async function deleteRosterPilot(id){
