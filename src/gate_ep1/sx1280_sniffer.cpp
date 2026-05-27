@@ -67,8 +67,17 @@ static int8_t s_last_rssi = -127;
 
 // ---- SPI helpers ----
 
-static inline void busyWait() {
-    while (digitalRead(SX_PIN_BUSY)) yield();
+// Returns false if BUSY stays HIGH for more than 50 ms (avoids WDT reset).
+static bool busyWait() {
+    uint32_t t0 = millis();
+    while (digitalRead(SX_PIN_BUSY)) {
+        if (millis() - t0 > 50) {
+            Serial.println("[sx] BUSY stuck >50ms");
+            return false;
+        }
+        yield();
+    }
+    return true;
 }
 
 static void writeCmd(uint8_t cmd, const uint8_t *data, uint8_t len) {
@@ -119,26 +128,37 @@ bool sxBegin() {
     pinMode(SX_PIN_BUSY, INPUT);
     pinMode(SX_PIN_DIO1, INPUT);
 
+    Serial.printf("[sx] pins ok, BUSY=%d RST=%d\n",
+                  digitalRead(SX_PIN_BUSY), digitalRead(SX_PIN_RST));
+
     // Hardware reset: pull RST low for 100 µs, then wait for chip ready.
     digitalWrite(SX_PIN_RST, LOW);
     delayMicroseconds(100);
     digitalWrite(SX_PIN_RST, HIGH);
-    delay(10);
+    delay(10);  // SX1280 needs up to 1ms after RST goes HIGH before BUSY deasserts
+
+    Serial.printf("[sx] after reset, BUSY=%d\n", digitalRead(SX_PIN_BUSY));
 
     SPI.begin();
     SPI.setFrequency(8000000);
     SPI.setDataMode(SPI_MODE0);
     SPI.setBitOrder(MSBFIRST);
 
+    Serial.println("[sx] SPI init");
+
     // SetStandby RC — required before any configuration writes.
     uint8_t stdby = STDBY_RC;
+    Serial.println("[sx] SetStandby...");
     writeCmd(SX_CMD_SET_STANDBY, &stdby, 1);
     delay(2);
+    Serial.printf("[sx] SetStandby done, BUSY=%d\n", digitalRead(SX_PIN_BUSY));
 
     // Verify chip is present: firmware version register must be non-zero/non-0xFF.
+    Serial.println("[sx] reading FW ver...");
     uint8_t fwHi = readReg(REG_FIRMWARE_VERSION_MSB);
     uint8_t fwLo = readReg(REG_FIRMWARE_VERSION_MSB + 1);
     uint16_t fwVer = ((uint16_t)fwHi << 8) | fwLo;
+    Serial.printf("[sx] FW ver=0x%04X\n", fwVer);
     if (fwVer == 0x0000 || fwVer == 0xFFFF) return false;
 
     // SetPacketType: LoRa
