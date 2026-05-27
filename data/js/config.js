@@ -50,12 +50,21 @@ function renderRoster(){
     if(isEditing){
       var enterVal=(r.enter!=null?r.enter:-80);
       var exitVal=(r.exit!=null?r.exit:-90);
+      var editSlot=activeSlotsLocal.indexOf(r.id);
+      var editEp1=editSlot>=0?slotEp1Macs[editSlot]:'';
+      var ep1Hint=editEp1?'<span style="color:var(--ok);font-size:9px">→ Ch'+(editSlot+1)+' EP1 自動書込</span>':'';
       item.innerHTML=
         '<div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:4px">'
           +'<input type="text" id="editName" value="'+esc(r.name)+'" maxlength="20" placeholder="パイロット名" autocomplete="off" style="background:var(--bg);border:1px solid var(--accent);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px;width:100%">'
           +'<input type="text" id="editYomi" value="'+esc(r.yomi||'')+'" maxlength="20" placeholder="読み方（よみかた）" autocomplete="off" style="background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:11px;width:100%">'
         +'</div>'
-        +'<input type="text" id="editUid" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px" autocomplete="off">'
+        +'<div style="display:flex;flex-direction:column;gap:2px">'
+          +'<input type="text" id="editPhrase" placeholder="バインドフレーズ" autocomplete="off" oninput="onEditPhraseInput()" style="width:130px;background:var(--bg);border:1px solid var(--bd);color:var(--muted);border-radius:5px;padding:2px 7px;font-size:10px" title="入力でUIDを自動計算">'
+          +'<div style="display:flex;align-items:center;gap:3px">'
+            +'<input type="text" id="editUid" value="'+esc(r.uid||'')+'" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF" style="width:130px;font-family:monospace;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:3px 7px;font-size:12px" autocomplete="off">'
+          +'</div>'
+          +ep1Hint
+        +'</div>'
         +'<div style="display:flex;flex-direction:column;gap:2px">'
           +'<div style="display:flex;align-items:center;gap:3px">'
             +'<label style="color:var(--muted);font-size:10px;width:20px">入</label>'
@@ -107,7 +116,10 @@ async function onChSelectChange(sel){
   }
   try{
     var r=await fetch('/api/active',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slots:newSlots})});
-    if(r.ok){activeSlotsLocal=newSlots;applyActiveToSlots();buildRaceCards();buildCalibCards();await loadRoster();}
+    if(r.ok){
+      activeSlotsLocal=newSlots;applyActiveToSlots();buildRaceCards();buildCalibCards();await loadRoster();
+      if(newCh>=0&&slotEp1Macs[newCh])toast('✓ Ch'+(newCh+1)+' 割当 + EP1 へ即時プロビジョニング済み');
+    }
     else toast('⚠️ 保存エラー');
   }catch(e){toast('⚠️ 接続エラー');}
 }
@@ -187,6 +199,14 @@ function onAddPhraseInput(){
   if(el)el.value=uid;
 }
 
+function onEditPhraseInput(){
+  var phrase=document.getElementById('editPhrase').value;
+  if(!phrase||typeof phraseToUid!=='function')return;
+  var uid=phraseToUid(phrase);
+  var el=document.getElementById('editUid');
+  if(el)el.value=uid;
+}
+
 function showAddForm(){document.getElementById('addForm').style.display='block';updateEp1List();document.getElementById('addName').focus();}
 function hideAddForm(){
   document.getElementById('addForm').style.display='none';
@@ -237,11 +257,15 @@ async function submitEdit(id){
   if(!name){toast('⚠️ 名前を入力してください');return;}
   var validUid=/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(uid);
   if(uid&&!validUid){toast('⚠️ UID形式: AA:BB:CC:DD:EE:FF');return;}
+  var slot=activeSlotsLocal.indexOf(id);
+  var ep1Mac=slot>=0?slotEp1Macs[slot]:'';
   try{
     var r=await fetch('/api/pilots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name,yomi,uid:validUid?uid:''})});
     if(r.ok){
       await fetch('/api/calib',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,enter,exit:exit_})});
-      editingRosterId=null;await loadRoster();applyActiveToSlots();buildRaceCards();toast('✓ 更新しました');
+      editingRosterId=null;await loadRoster();applyActiveToSlots();buildRaceCards();
+      if(ep1Mac&&validUid)toast('✓ 更新 + Ch'+(slot+1)+' EP1 へ即時プロビジョニング済み');
+      else toast('✓ 更新しました');
     }
     else toast('⚠️ 更新エラー');
   }catch(e){toast('⚠️ 接続エラー');}
