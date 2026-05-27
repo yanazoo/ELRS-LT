@@ -128,23 +128,35 @@ bool sxBegin() {
     pinMode(SX_PIN_BUSY, INPUT);
     pinMode(SX_PIN_DIO1, INPUT);
 
-    Serial.printf("[sx] pins ok, BUSY=%d RST=%d\n",
-                  digitalRead(SX_PIN_BUSY), digitalRead(SX_PIN_RST));
-
-    // Hardware reset: pull RST low for 100 µs, then wait for chip ready.
-    digitalWrite(SX_PIN_RST, LOW);
-    delayMicroseconds(100);
-    digitalWrite(SX_PIN_RST, HIGH);
-    delay(10);  // SX1280 needs up to 1ms after RST goes HIGH before BUSY deasserts
-
-    Serial.printf("[sx] after reset, BUSY=%d\n", digitalRead(SX_PIN_BUSY));
-
+    // Initialize SPI BEFORE reset so bus glitches during SPI.begin() do not
+    // reach the chip (SX1280 ignores SPI while RST is asserted or while BUSY).
     SPI.begin();
     SPI.setFrequency(8000000);
     SPI.setDataMode(SPI_MODE0);
     SPI.setBitOrder(MSBFIRST);
+    delay(5);  // let the SPI hardware settle
 
-    Serial.println("[sx] SPI init");
+    Serial.printf("[sx] SPI init, BUSY=%d RST=%d\n",
+                  digitalRead(SX_PIN_BUSY), digitalRead(SX_PIN_RST));
+
+    // Hardware reset: hold RST LOW for 100 µs, then release.
+    digitalWrite(SX_PIN_RST, LOW);
+    delayMicroseconds(100);
+    digitalWrite(SX_PIN_RST, HIGH);
+
+    // Poll BUSY until the chip finishes its internal firmware boot (typically
+    // < 3 ms).  200 ms hard timeout avoids a WDT reset if BUSY stays HIGH.
+    {
+        uint32_t t0 = millis();
+        while (digitalRead(SX_PIN_BUSY)) {
+            if (millis() - t0 > 200) {
+                Serial.println("[sx] BUSY stuck after reset (>200ms)");
+                return false;
+            }
+            yield();
+        }
+    }
+    Serial.printf("[sx] after reset, BUSY=%d\n", digitalRead(SX_PIN_BUSY));
 
     // SetStandby RC — required before any configuration writes.
     uint8_t stdby = STDBY_RC;
