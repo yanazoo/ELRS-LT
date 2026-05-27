@@ -119,23 +119,8 @@ function updateEp1List(){
   var sel=document.getElementById('addEp1Mac');
   var now=Date.now();
   var macs=Object.keys(ep1Nodes).filter(function(m){return now-ep1Nodes[m].lastSeenAt<30000;});
-  if(!macs.length){
-    if(el)el.innerHTML='<span style="color:var(--muted);font-size:12px">EP1 ノードを待機中... （EP1の電源を入れてください）</span>';
-    if(sel)sel.innerHTML='<option value="">なし</option>';
-    return;
-  }
-  if(el){
-    el.innerHTML=macs.map(function(mac,i){
-      var n=ep1Nodes[mac];
-      var stName=EP1_STATE_NAMES[n.state]||'不明';
-      var uidLine=n.uid?'<span style="font-family:monospace;font-size:10px;color:var(--muted);margin-left:6px">'+esc(n.uid)+'</span>':'';
-      return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0">'
-        +'<span style="font-weight:700;color:var(--accent);font-size:13px">#'+(i+1)+'</span>'
-        +'<span style="font-family:monospace;font-size:12px">'+esc(mac)+'</span>'
-        +'<span style="font-size:11px;color:var(--ok)">'+esc(stName)+'</span>'
-        +uidLine+'</div>';
-    }).join('');
-  }
+
+  // Update addForm EP1 selector
   if(sel){
     var prev=sel.value;
     sel.innerHTML='<option value="">なし</option>'
@@ -144,6 +129,53 @@ function updateEp1List(){
         return '<option value="'+esc(mac)+'"'+(prev===mac?' selected':'')+'>EP1 #'+(i+1)+' — '+esc(stName)+'</option>';
       }).join('');
   }
+
+  if(!el)return;
+  if(!macs.length){
+    el.innerHTML='<span style="color:var(--muted);font-size:12px">EP1 ノードを待機中... （EP1の電源を入れてください）</span>';
+    return;
+  }
+  el.innerHTML=macs.map(function(mac,i){
+    var n=ep1Nodes[mac];
+    var stName=EP1_STATE_NAMES[n.state]||'不明';
+    var uidLine=n.uid?'<span style="font-family:monospace;font-size:10px;color:var(--muted)"> UID:'+esc(n.uid)+'</span>':'';
+    var curSlot=slotEp1Macs.indexOf(mac);
+    var slotOpts='<option value="-1"'+(curSlot<0?' selected':'')+'>なし</option>'
+      +[0,1,2,3].map(function(s){
+        return '<option value="'+s+'"'+(curSlot===s?' selected':'')+'>Ch'+(s+1)+'</option>';
+      }).join('');
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">'
+      +'<span style="font-weight:700;color:var(--accent);font-size:13px">#'+(i+1)+'</span>'
+      +'<span style="font-family:monospace;font-size:12px">'+esc(mac)+'</span>'
+      +'<span style="font-size:11px;color:var(--ok)">'+esc(stName)+'</span>'
+      +uidLine
+      +'<select onchange="onEp1SlotChange(\''+mac+'\',this)" style="margin-left:auto;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:3px 6px;font-size:12px">'
+      +slotOpts+'</select>'
+      +'</div>';
+  }).join('');
+}
+
+async function onEp1SlotChange(mac,selEl){
+  var newSlot=parseInt(selEl.value);
+  var arr=slotEp1Macs.slice();
+  for(var i=0;i<N;i++)if(arr[i]===mac)arr[i]='';
+  if(newSlot>=0&&newSlot<N)arr[newSlot]=mac;
+  slotEp1Macs=arr;
+  try{
+    await fetch('/api/ep1/slots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slots:slotEp1Macs})});
+    toast(newSlot>=0?'✓ EP1 を Ch'+(newSlot+1)+' に割当しました':'✓ EP1 の割当を解除しました');
+  }catch(e){toast('⚠️ 接続エラー');}
+}
+
+async function loadEp1Slots(){
+  try{
+    var r=await fetch('/api/ep1/slots');
+    if(r.ok){
+      var d=await r.json();
+      slotEp1Macs=(d.slots||['','','','']).map(function(s){return s||'';});
+      updateEp1List();
+    }
+  }catch(e){}
 }
 
 function onAddPhraseInput(){

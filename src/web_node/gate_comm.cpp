@@ -59,6 +59,23 @@ void updateScanMac(const char* mac, int rssi) {
     }
 }
 
+void sendEp1ProvisionForSlot(int slot) {
+    if (!slotEp1Mac[slot][0]) return;
+    int ri = activePilots[slot];
+    if (ri < 0 || ri >= rosterCount || !roster[ri].hasUid) return;
+    char uid[18]; uidToStr(roster[ri].uid, uid);
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
+             slotEp1Mac[slot], uid);
+    Serial1.println(buf);
+    Serial.printf("[Web] auto-provision slot=%d ep1=%s uid=%s\n", slot, slotEp1Mac[slot], uid);
+}
+
+void sendAllEp1Provisions() {
+    for (int s = 0; s < MAX_ACTIVE; s++) sendEp1ProvisionForSlot(s);
+}
+
 void sendGateCooldown() {
     char buf[64];
     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"set_cooldown","ms":%lu})", (unsigned long)cooldownMs);
@@ -94,6 +111,7 @@ void sendGatePilot(int slot) {
     serializeJson(doc, Serial1);
     Serial1.print('\n');
     delay(30);
+    sendEp1ProvisionForSlot(slot);
 }
 
 void sendGateThreshold(int slot) {

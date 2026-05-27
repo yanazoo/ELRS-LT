@@ -176,6 +176,8 @@ async function loadAll(){
     if(rs.ok){var sd=await rs.json();updateSdSection(sd.present);}
   }catch(e){}
 
+  if(typeof loadEp1Slots==='function')await loadEp1Slots();
+
   try{
     var ra=await fetch('/api/active');if(ra.ok){
       var active=await ra.json();

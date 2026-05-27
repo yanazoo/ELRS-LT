@@ -34,6 +34,7 @@ function sdLogModeInt(m){return m==='off'?2:(m==='rotate'?1:0);}
 
 var scanResults  = {};
 var ep1Nodes     = {};   // mac -> {mac, state, uid, lastSeenAt}
+var slotEp1Macs  = ['','','',''];  // EP1 MAC per slot (index = slot)
 var editingRosterId = null;
 var sdPresent = false;
 var sdFileList = [];
