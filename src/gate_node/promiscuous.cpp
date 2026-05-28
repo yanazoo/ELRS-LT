@@ -25,7 +25,7 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
         xQueueSendFromISR(packetQueue, &pkt, &woken);
         if (woken) portYIELD_FROM_ISR();
 
-    } else if (len == (int)sizeof(GateEP1BeaconPacket_t)) {
+    } else if (len >= (int)sizeof(GateEP1BeaconPacket_t) && len <= 16) {
         const GateEP1BeaconPacket_t *b = (const GateEP1BeaconPacket_t *)data;
         if (b->magic != EP1_BEACON_MAGIC) return;
 
