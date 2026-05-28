@@ -161,7 +161,18 @@ function onMsg(d){
     return;
   }
   if(d.type==='ep1_hello'){
-    ep1Nodes[d.mac]={mac:d.mac,state:d.state,uid:d.uid||'',lastSeenAt:Date.now()};
+    var _mac=d.mac;
+    ep1Nodes[_mac]={mac:_mac,state:d.state,uid:d.uid||'',lastSeenAt:Date.now()};
+    // Auto-assign to next free slot in arrival order (skip if already assigned or race running)
+    if(!raceRunning && !slotEp1Macs.includes(_mac)){
+      var _free=slotEp1Macs.findIndex(function(m){return !m;});
+      if(_free>=0){
+        slotEp1Macs[_free]=_mac;
+        fetch('/api/ep1/slots',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({slots:slotEp1Macs})}).catch(function(){});
+      }
+    }
     if(typeof updateEp1List==='function')updateEp1List();
     return;
   }

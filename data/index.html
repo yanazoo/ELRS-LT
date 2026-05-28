@@ -207,18 +207,8 @@ footer{background:var(--sf);border-top:1px solid var(--bd);text-align:center;pad
   <h2 class="section-title">設定</h2>
 
   <div class="global-config-card">
-    <h3 class="global-title">📡 機体スキャン</h3>
-    <p class="section-desc">ドローンの EP1/EP2 TCXO（標準 ELRS ファーム）の電源を入れると、ゲートスニファーが ELRS バインド UID を自動検出します。名前を入力してパイロット情報に登録してください。入RSSI・出RSSIはスキャン時の電波強度から自動設定されます。</p>
-    <div id="scanList" style="min-height:32px"><span style="color:var(--muted);font-size:12px">スキャン待機中... 機体の電源を入れてください</span></div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button onclick="scanRefresh(true)" class="btn-secondary" style="flex:1;font-size:12px">🔄 スキャン更新</button>
-      <button onclick="clearScan()" class="btn-secondary" style="flex:1;font-size:12px">🗑 リストをクリア</button>
-    </div>
-  </div>
-
-  <div class="global-config-card">
     <h3 class="global-title">📻 EP1 ノード</h3>
-    <p class="section-desc">ゲートに接続された EP1 スニファーが自動検出されます。パイロット登録時にノードを選択すると、バインドフレーズから計算した UID を ESP-NOW 経由で EP1 へ書き込み、スキャンを開始します。</p>
+    <p class="section-desc">EP1 スニファーが自動検出され、検出順に Ch1 / Ch2... へ自動割り当てされます。パイロット情報に UID が登録されると、ESP-NOW 経由で EP1 へ UID を書き込み、スキャンを開始します。</p>
     <div id="ep1List"><span style="color:var(--muted);font-size:12px">EP1 ノードを待機中... （EP1の電源を入れてください）</span></div>
   </div>
 

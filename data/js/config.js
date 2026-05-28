@@ -151,21 +151,18 @@ function updateEp1List(){
   el.innerHTML=macs.map(function(mac,i){
     var n=ep1Nodes[mac];
     var stName=EP1_STATE_NAMES[n.state]||'不明';
+    var stColor=(n.state===2)?'var(--ok)':(n.state===1)?'var(--accent)':'var(--muted)';
     var uidLine=n.uid?'<span style="font-family:monospace;font-size:10px;color:var(--muted)"> UID:'+esc(n.uid)+'</span>':'';
     var curSlot=slotEp1Macs.indexOf(mac);
-    var slotOpts='<option value="-1"'+(curSlot<0?' selected':'')+'>なし</option>'
-      +[0,1,2,3].map(function(s){
-        return '<option value="'+s+'"'+(curSlot===s?' selected':'')+'>Ch'+(s+1)+'</option>';
-      }).join('');
-    var slotCtrl=raceRunning
-      ?'<span style="color:var(--muted);font-size:10px;margin-left:auto">計測中</span>'
-      :'<select onchange="onEp1SlotChange(\''+mac+'\',this)" style="margin-left:auto;background:var(--bg);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:3px 6px;font-size:12px">'+slotOpts+'</select>';
+    var slotBadge=curSlot>=0
+      ?'<span style="margin-left:auto;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;background:var(--'+PCLS[curSlot]+'-bg);color:var(--'+PCLS[curSlot]+');border:1px solid var(--'+PCLS[curSlot]+')">'+'Ch'+(curSlot+1)+'</span>'
+      :'<span style="margin-left:auto;font-size:10px;color:var(--muted)">自動割当待ち</span>';
     return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">'
       +'<span style="font-weight:700;color:var(--accent);font-size:13px">#'+(i+1)+'</span>'
       +'<span style="font-family:monospace;font-size:12px">'+esc(mac)+'</span>'
-      +'<span style="font-size:11px;color:var(--ok)">'+esc(stName)+'</span>'
+      +'<span style="font-size:11px;color:'+stColor+'">'+esc(stName)+'</span>'
       +uidLine
-      +slotCtrl
+      +slotBadge
       +'</div>';
   }).join('');
 }

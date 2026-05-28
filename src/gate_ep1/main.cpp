@@ -152,12 +152,17 @@ static bool tryProvision() {
 }
 
 // ---- Beacon timer ----
-#define BEACON_INTERVAL_MS 5000U
+// PROVISION: 1 s (Gate discovers EP1 quickly on boot)
+// SCAN/FOLLOW: 5 s (keep-alive, Gate UI updates state)
+#define BEACON_INTERVAL_PROVISION_MS 1000U
+#define BEACON_INTERVAL_ACTIVE_MS    5000U
 static uint32_t s_lastBeaconMs = 0;
 
 static void maybeSendBeacon() {
     uint32_t now = millis();
-    if (now - s_lastBeaconMs >= BEACON_INTERVAL_MS) {
+    uint32_t interval = (state == ST_PROVISION) ? BEACON_INTERVAL_PROVISION_MS
+                                                 : BEACON_INTERVAL_ACTIVE_MS;
+    if (now - s_lastBeaconMs >= interval) {
         s_lastBeaconMs = now;
         espnowSendBeacon(ident.uid, ident.valid, (uint8_t)state);
     }

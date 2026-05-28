@@ -70,7 +70,9 @@ function calcChartRange(id){
       hasData=true;
     }
   }
-  var allVals=hasData?[dMin,dMax,p.enterRssi,p.exitRssi]:[p.enterRssi,p.exitRssi];
+  // Without real signal data include -110 so the no-signal line (-120 clamped)
+  // stays visible near the bottom instead of being clipped off-screen.
+  var allVals=hasData?[dMin,dMax,p.enterRssi,p.exitRssi]:[p.enterRssi,p.exitRssi,-110];
   var yMin=Math.min.apply(null,allVals)-5;
   var yMax=Math.max.apply(null,allVals)+5;
   if(yMax-yMin<20){var mid=(yMax+yMin)/2;yMin=mid-10;yMax=mid+10;}
