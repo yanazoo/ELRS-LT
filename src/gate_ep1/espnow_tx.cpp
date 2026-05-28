@@ -89,5 +89,5 @@ void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state) {
     if (uidValid) memcpy(pkt.uid, uid, 6);
     else          memset(pkt.uid, 0, 6);
     int rc = esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
-    if (rc != 0) Serial.printf("[espnow] send beacon rc=%d\n", rc);
+    Serial.printf("[espnow] beacon tx state=%u rc=%d\n", (unsigned)state, rc);
 }
