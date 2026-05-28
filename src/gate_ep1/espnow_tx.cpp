@@ -17,7 +17,7 @@
 #include <string.h>
 
 extern "C" {
-#include <user_interface.h>   // wifi_set_channel()
+#include <user_interface.h>   // wifi_set_channel(), wifi_get_channel()
 }
 
 static const uint8_t BCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -42,13 +42,30 @@ static void onRecv(u8 *srcMac, u8 *data, u8 len) {
     if (s_provisionCb) s_provisionCb(pkt.uid);
 }
 
+// Re-pin radio channel and ensure broadcast peer exists. ESP8266 STA stack can
+// silently change channels (background scan, AP-reconnect attempts) and some
+// ESP-NOW stack states drop peers. Calling this before every send is cheap and
+// makes broadcast delivery reliable.
+static void ensureChannelAndPeer() {
+    if (wifi_get_channel() != ESPNOW_CHANNEL) {
+        wifi_set_channel(ESPNOW_CHANNEL);
+    }
+    if (!esp_now_is_peer_exist((u8*)BCAST_MAC)) {
+        esp_now_add_peer((u8*)BCAST_MAC, ESP_NOW_ROLE_COMBO, ESPNOW_CHANNEL, NULL, 0);
+    }
+}
+
 bool espnowBegin() {
+    // Prevent the STA stack from auto-connecting / auto-reconnecting to any
+    // saved AP — that would trigger background scanning and pull the radio
+    // off ESPNOW_CHANNEL.
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    WiFi.setAutoConnect(false);
+    WiFi.setAutoReconnect(false);
 
-    // Force the radio onto the Gate Node's channel. Without this, ESP8266
-    // STA mode may sit on a different channel from a stale stored AP and
-    // ESP-NOW will silently fail to deliver.
+    // Force the radio onto the Gate Node's channel.
     wifi_set_channel(ESPNOW_CHANNEL);
 
     if (esp_now_init() != 0) {
@@ -57,7 +74,6 @@ bool espnowBegin() {
     }
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);  // both send + receive
 
-    // Add broadcast as a peer so esp_now_send(BCAST_MAC, ...) succeeds.
     if (esp_now_add_peer((u8*)BCAST_MAC, ESP_NOW_ROLE_COMBO, ESPNOW_CHANNEL, NULL, 0) != 0) {
         Serial.println("[espnow] add_peer(broadcast) failed");
     }
@@ -72,6 +88,7 @@ bool espnowBegin() {
 }
 
 void espnowSendRssi(const uint8_t uid[6], int8_t rssi, uint8_t lq, uint32_t ts) {
+    ensureChannelAndPeer();
     GateEP1Packet_t pkt;
     memcpy(pkt.pilot_uid, uid, 6);
     pkt.rssi = rssi;
@@ -83,11 +100,13 @@ void espnowSendRssi(const uint8_t uid[6], int8_t rssi, uint8_t lq, uint32_t ts) 
 // Sends a presence beacon so Gate Node can discover this EP1's MAC and
 // relay it to the Web UI for dynamic node assignment.
 void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state) {
+    ensureChannelAndPeer();
     GateEP1BeaconPacket_t pkt;
     pkt.magic = EP1_BEACON_MAGIC;
     pkt.state = state;
     if (uidValid) memcpy(pkt.uid, uid, 6);
     else          memset(pkt.uid, 0, 6);
     int rc = esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
-    Serial.printf("[espnow] beacon tx state=%u rc=%d\n", (unsigned)state, rc);
+    Serial.printf("[espnow] beacon tx state=%u ch=%u rc=%d\n",
+                  (unsigned)state, (unsigned)wifi_get_channel(), rc);
 }
