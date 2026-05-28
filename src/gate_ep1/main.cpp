@@ -45,6 +45,11 @@ static void lqPush(bool got) {
 
 static uint8_t lqPct() { return (uint8_t)((s_lqSum * 100U) / LQ_WINDOW); }
 
+// ---- Noise floor EMA state (declared early so applyProvision can reset it) ----
+static float   s_noiseEma      = -120.0f;
+static bool    s_noiseValid    = false;
+static uint8_t s_noiseHopCount = 0;
+
 // ---- ESP-NOW provision from Gate Node ----
 // Written from ESP-NOW recv callback (network task context).
 static volatile bool s_newProvision = false;
@@ -155,10 +160,8 @@ static bool tryProvision() {
 
 // ---- Noise floor EMA (SCAN state only) ----
 // Sampled every NOISE_SAMPLE_HOPS hops via GetRssiInst, smoothed with EMA.
+// State variables (s_noiseEma / s_noiseValid / s_noiseHopCount) declared above.
 #define NOISE_SAMPLE_HOPS 50   // ~75 ms at SCAN_DWELL_US=1500
-static float   s_noiseEma      = -120.0f;
-static bool    s_noiseValid     = false;
-static uint8_t s_noiseHopCount = 0;
 
 static void sampleNoise() {
     if (++s_noiseHopCount < NOISE_SAMPLE_HOPS) return;
