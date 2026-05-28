@@ -12,13 +12,12 @@ typedef struct __attribute__((packed)) {
     uint32_t ts;
 } GateEP1Packet_t;
 
-// ---- Packet: EP1 -> Gate Node (presence beacon, 9 bytes) ----
+// ---- Packet: EP1 -> Gate Node (presence beacon, 8 bytes) ----
 #define EP1_BEACON_MAGIC  0xA5
 typedef struct __attribute__((packed)) {
     uint8_t magic;   // EP1_BEACON_MAGIC
     uint8_t state;   // 0=PROVISION 1=SCAN 2=FOLLOW
     uint8_t uid[6];  // current UID (all-zero if not provisioned)
-    int8_t  noise;   // SCAN-state noise floor dBm; -127 if unavailable
 } GateEP1BeaconPacket_t;
 
 // ---- Packet: Gate Node -> EP1 (unicast provisioning, 7 bytes) ----

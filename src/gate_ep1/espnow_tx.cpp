@@ -99,15 +99,14 @@ void espnowSendRssi(const uint8_t uid[6], int8_t rssi, uint8_t lq, uint32_t ts) 
 
 // Sends a presence beacon so Gate Node can discover this EP1's MAC and
 // relay it to the Web UI for dynamic node assignment.
-void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state, int8_t noise) {
+void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state) {
     ensureChannelAndPeer();
     GateEP1BeaconPacket_t pkt;
     pkt.magic = EP1_BEACON_MAGIC;
     pkt.state = state;
-    pkt.noise = noise;
     if (uidValid) memcpy(pkt.uid, uid, 6);
     else          memset(pkt.uid, 0, 6);
     int rc = esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
-    Serial.printf("[espnow] beacon tx state=%u noise=%d ch=%u rc=%d\n",
-                  (unsigned)state, (int)noise, (unsigned)wifi_get_channel(), rc);
+    Serial.printf("[espnow] beacon tx state=%u ch=%u rc=%d\n",
+                  (unsigned)state, (unsigned)wifi_get_channel(), rc);
 }

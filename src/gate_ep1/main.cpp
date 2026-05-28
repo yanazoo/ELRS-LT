@@ -45,11 +45,6 @@ static void lqPush(bool got) {
 
 static uint8_t lqPct() { return (uint8_t)((s_lqSum * 100U) / LQ_WINDOW); }
 
-// ---- Noise floor EMA state (declared early so applyProvision can reset it) ----
-static float   s_noiseEma      = -120.0f;
-static bool    s_noiseValid    = false;
-static uint8_t s_noiseHopCount = 0;
-
 // ---- ESP-NOW provision from Gate Node ----
 // Written from ESP-NOW recv callback (network task context).
 static volatile bool s_newProvision = false;
@@ -83,12 +78,10 @@ static void applyProvision() {
         hopIndex = 0; missStreak = 0;
         s_lqHead = 0; s_lqSum = 0;
         memset(s_lqBuf, 0, sizeof(s_lqBuf));
-        s_noiseValid = false; s_noiseHopCount = 0;  // reset noise for new UID
         state = ST_SCAN;
         Serial.println(F("[gate_ep1] -> SCAN"));
     } else {
         ident.valid = false;
-        s_noiseValid = false; s_noiseHopCount = 0;
         state = ST_PROVISION;
         Serial.println(F("[gate_ep1] UID cleared -> PROVISION"));
     }
@@ -158,24 +151,9 @@ static bool tryProvision() {
 #endif
 }
 
-// ---- Noise floor EMA (SCAN state only) ----
-// Sampled every NOISE_SAMPLE_HOPS hops via GetRssiInst, smoothed with EMA.
-// State variables (s_noiseEma / s_noiseValid / s_noiseHopCount) declared above.
-#define NOISE_SAMPLE_HOPS 50   // ~75 ms at SCAN_DWELL_US=1500
-
-static void sampleNoise() {
-    if (++s_noiseHopCount < NOISE_SAMPLE_HOPS) return;
-    s_noiseHopCount = 0;
-    int8_t inst = sxReadInstRssi();
-    if (!s_noiseValid) { s_noiseEma = (float)inst; s_noiseValid = true; }
-    else               { s_noiseEma = 0.85f * s_noiseEma + 0.15f * (float)inst; }
-}
-
-static int8_t noiseFloor() { return s_noiseValid ? (int8_t)s_noiseEma : -127; }
-
 // ---- Beacon timer ----
 // PROVISION: 1 s (Gate discovers EP1 quickly on boot)
-// SCAN:      2 s (noise floor updates visible in calib chart)
+// SCAN:      2 s
 // FOLLOW:    5 s (keep-alive only)
 #define BEACON_INTERVAL_PROVISION_MS 1000U
 #define BEACON_INTERVAL_SCAN_MS      2000U
@@ -189,8 +167,7 @@ static void maybeSendBeacon() {
                                                  : BEACON_INTERVAL_FOLLOW_MS;
     if (now - s_lastBeaconMs >= interval) {
         s_lastBeaconMs = now;
-        int8_t n = (state == ST_SCAN) ? noiseFloor() : -127;
-        espnowSendBeacon(ident.uid, ident.valid, (uint8_t)state, n);
+        espnowSendBeacon(ident.uid, ident.valid, (uint8_t)state);
     }
 }
 
@@ -226,7 +203,6 @@ void setup() {
     if (!espnowBegin()) Serial.println(F("[gate_ep1] ESP-NOW FAILED"));
     else                Serial.println(F("[gate_ep1] ESP-NOW OK"));
     espnowSetProvisionCallback(onProvision);
-    // Send first beacon immediately so Gate Node sees us right away.
     espnowSendBeacon(ident.uid, ident.valid, (uint8_t)state);
     s_lastBeaconMs = millis();
 }
@@ -254,7 +230,6 @@ void loop() {
     case ST_SCAN: {
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
         delayMicroseconds(SCAN_DWELL_US);
-        sampleNoise();   // GetRssiInst during dwell, update EMA
 
         if (sxPacketReceived()) {
             uint16_t lockHop = hopIndex;

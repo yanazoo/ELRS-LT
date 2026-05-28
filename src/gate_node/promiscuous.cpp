@@ -36,13 +36,13 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
         for (int i = 0; i < 6; i++) if (b->uid[i]) { hasUid = true; break; }
         if (hasUid) fmtMac(b->uid, uidStr);
 
-        Serial.printf("[Gate] beacon from %s state=%u uid=%s noise=%d\n",
-                      macStr, (unsigned)b->state, uidStr[0] ? uidStr : "(none)", (int)b->noise);
+        Serial.printf("[Gate] beacon from %s state=%u uid=%s\n",
+                      macStr, (unsigned)b->state, uidStr[0] ? uidStr : "(none)");
 
         char json[120];
         snprintf(json, sizeof(json),
-                 R"({"type":"ep1_hello","mac":"%s","state":%u,"uid":"%s","noise":%d})",
-                 macStr, (unsigned)b->state, uidStr, (int)b->noise);
+                 R"({"type":"ep1_hello","mac":"%s","state":%u,"uid":"%s"})",
+                 macStr, (unsigned)b->state, uidStr);
         Serial1.println(json);
 
     } else {
