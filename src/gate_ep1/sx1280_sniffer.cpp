@@ -227,6 +227,14 @@ int8_t sxReadRssi() {
     return s_last_rssi;
 }
 
+int8_t sxReadInstRssi() {
+    // GetRssiInst (0x1F): response = status(ignored) + 1 byte RSSIinst
+    // dBm = -RSSIinst / 2  (per SX1280 datasheet §13.5.3)
+    uint8_t buf[1] = { 0xFF };
+    readCmd(SX_CMD_GET_RSSI_INST, buf, 1);
+    return -(int8_t)(buf[0] / 2);
+}
+
 bool sxPacketReceived() {
     uint8_t irqBuf[2] = {};
     readCmd(SX_CMD_GET_IRQ_STATUS, irqBuf, 2);

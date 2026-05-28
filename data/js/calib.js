@@ -70,9 +70,9 @@ function calcChartRange(id){
       hasData=true;
     }
   }
-  // Without real signal data include -110 so the no-signal line (-120 clamped)
-  // stays visible near the bottom instead of being clipped off-screen.
   var allVals=hasData?[dMin,dMax,p.enterRssi,p.exitRssi]:[p.enterRssi,p.exitRssi,-110];
+  // Always include noise floor in range so the dashed line is never clipped
+  if(typeof p.noiseFloor==='number'&&p.noiseFloor>-119)allVals.push(p.noiseFloor-3);
   var yMin=Math.min.apply(null,allVals)-5;
   var yMax=Math.max.apply(null,allVals)+5;
   if(yMax-yMin<20){var mid=(yMax+yMin)/2;yMin=mid-10;yMax=mid+10;}
@@ -108,6 +108,16 @@ function drawChart(id){
   ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.beginPath();
   for(var j=0;j<200;j++){var x=j*dx,y=toY(c.data[j]);j===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}
   ctx.stroke();
+  // Noise floor line (EP1 SCAN state measurement, updated every 2s)
+  if(typeof p.noiseFloor==='number'&&p.noiseFloor>-119){
+    var ny=toY(p.noiseFloor);
+    ctx.setLineDash([3,4]);ctx.lineWidth=1;
+    ctx.strokeStyle='rgba(160,160,200,0.65)';
+    ctx.beginPath();ctx.moveTo(0,ny);ctx.lineTo(w,ny);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(160,160,200,0.8)';ctx.font='9px monospace';
+    ctx.fillText('noise '+p.noiseFloor+'dBm',3,ny-2);
+  }
 }
 
 function cap(s){return s.charAt(0).toUpperCase()+s.slice(1);}

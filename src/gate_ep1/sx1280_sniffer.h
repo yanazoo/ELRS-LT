@@ -13,5 +13,9 @@ void sxSetFrequencyHz(uint32_t freqHz);
 // Read instantaneous RSSI (dBm, negative). Valid after a packet or in RX.
 int8_t sxReadRssi();
 
+// Read instantaneous ambient RSSI from GetRssiInst — usable at any time
+// while the radio is in RX mode (SCAN or FOLLOW). Returns noise floor dBm.
+int8_t sxReadInstRssi();
+
 // True if a packet was received since the last check (sync detection).
 bool sxPacketReceived();

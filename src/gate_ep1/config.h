@@ -52,13 +52,14 @@ typedef struct __attribute__((packed)) {
     uint32_t ts;             // sniffer millis() timestamp
 } GateEP1Packet_t;           // 12 bytes
 
-// ---- ESP-NOW packet: EP1 -> Gate ESP32 (presence beacon, 8 bytes) ----
+// ---- ESP-NOW packet: EP1 -> Gate ESP32 (presence beacon, 9 bytes) ----
 #define EP1_BEACON_MAGIC  0xA5
 typedef struct __attribute__((packed)) {
     uint8_t magic;   // EP1_BEACON_MAGIC = 0xA5
     uint8_t state;   // 0=PROVISION 1=SCAN 2=FOLLOW
     uint8_t uid[6];  // current UID (all-zero if not provisioned)
-} GateEP1BeaconPacket_t;     // 8 bytes
+    int8_t  noise;   // instantaneous noise floor dBm during SCAN; -127 if unavailable
+} GateEP1BeaconPacket_t;     // 9 bytes
 
 // ---- ESP-NOW packet: Gate ESP32 -> EP1 (provisioning, 7 bytes) ----
 #define GATE_PROV_MAGIC   0xB1

@@ -162,7 +162,8 @@ function onMsg(d){
   }
   if(d.type==='ep1_hello'){
     var _mac=d.mac;
-    ep1Nodes[_mac]={mac:_mac,state:d.state,uid:d.uid||'',lastSeenAt:Date.now()};
+    var _noise=(d.noise!==undefined&&d.noise>-127)?d.noise:null;
+    ep1Nodes[_mac]={mac:_mac,state:d.state,uid:d.uid||'',noise:_noise,lastSeenAt:Date.now()};
     // Auto-assign to next free slot in arrival order (skip if already assigned or race running)
     if(!raceRunning && !slotEp1Macs.includes(_mac)){
       var _free=slotEp1Macs.findIndex(function(m){return !m;});
@@ -172,6 +173,12 @@ function onMsg(d){
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({slots:slotEp1Macs})}).catch(function(){});
       }
+    }
+    // Update noise floor for the slot assigned to this EP1
+    var _nSlot=slotEp1Macs.indexOf(_mac);
+    if(_nSlot>=0){
+      slots[_nSlot].noiseFloor=_noise;
+      if(typeof chartDirty!=='undefined')chartDirty[_nSlot]=true;
     }
     if(typeof updateEp1List==='function')updateEp1List();
     return;
