@@ -149,6 +149,27 @@ void processGateLine(const String& line) {
     }
     if (strcmp(type, "ep1_hello") == 0) {
         wsText(line);
+        int ep1State  = doc["state"] | -1;
+        const char* mac = doc["mac"] | "";
+        if (ep1State >= 0 && ep1State <= 1 && strlen(mac) == 17) {
+            for (int s = 0; s < MAX_ACTIVE; s++) {
+                if (strcmp(slotEp1Mac[s], mac) != 0) continue;
+                if (ep1State == 0) {
+                    // EP1 has no UID yet — send provision immediately
+                    sendEp1ProvisionForSlot(s);
+                } else {
+                    // EP1 is scanning — re-provision if its UID doesn't match
+                    const char* ep1Uid = doc["uid"] | "";
+                    int ri = activePilots[s];
+                    if (ri >= 0 && ri < rosterCount && roster[ri].hasUid) {
+                        char expected[18]; uidToStr(roster[ri].uid, expected);
+                        if (strcasecmp(ep1Uid, expected) != 0)
+                            sendEp1ProvisionForSlot(s);
+                    }
+                }
+                break;
+            }
+        }
         return;
     }
     if (strcmp(type, "scan") == 0) {
