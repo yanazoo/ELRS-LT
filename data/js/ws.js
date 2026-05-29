@@ -83,6 +83,7 @@ function onMsg(d){
     var calR=p.calRssiEl||(p.calRssiEl=document.getElementById('calRssi'+s));
     if(calR){var cv=p.rssiSignal?p.rssi:'---';if(calR._v!==cv){calR.textContent=cv;calR._v=cv;}}
     pushChart(s,p.rssiSignal?p.rssi:-120,p.crossing);
+    if(typeof updateCalibStatus==='function')updateCalibStatus(s);
     return;
   }
   if(d.type==='gate_start'){
@@ -174,6 +175,10 @@ function onMsg(d){
       }
     }
     if(typeof updateEp1List==='function')updateEp1List();
+    if(typeof updateCalibStatus==='function'){
+      var _sl=slotEp1Macs.indexOf(_mac);
+      if(_sl>=0)updateCalibStatus(_sl);
+    }
     return;
   }
 }

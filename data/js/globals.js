@@ -72,6 +72,7 @@ function switchTab(tab){
   if(tab==='calib'){
     setTimeout(()=>{
       slots.forEach(p=>{
+        if(typeof updateCalibStatus==='function')updateCalibStatus(p.id);
         var c=charts[p.id];if(!c)return;
         var newW=c.cv.offsetWidth||300;
         if(newW!==c.cv.width){c.cv.width=newW;}
