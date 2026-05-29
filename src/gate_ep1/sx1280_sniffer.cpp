@@ -24,7 +24,6 @@
 #define SX_CMD_SET_RX              0x82
 #define SX_CMD_GET_IRQ_STATUS      0x15
 #define SX_CMD_CLR_IRQ_STATUS      0x97
-#define SX_CMD_GET_RSSI_INST       0x1F
 #define SX_CMD_GET_PKT_STATUS      0x1D
 #define SX_CMD_READ_REGISTER       0x19
 #define SX_CMD_WRITE_REGISTER      0x18
