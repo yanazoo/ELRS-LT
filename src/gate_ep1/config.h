@@ -32,7 +32,7 @@
 
 // ---- Lock-on tuning ----
 #define SCAN_DWELL_US        1500   // RX dwell per channel during SCAN phase
-#define MISS_STREAK_RESYNC   30     // consecutive misses -> drop back to SCAN
+#define MISS_STREAK_RESYNC   50     // consecutive misses -> drop back to SCAN (200ms at 250Hz)
 
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS

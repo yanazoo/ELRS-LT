@@ -229,9 +229,19 @@ void loop() {
 
     case ST_SCAN: {
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
-        delayMicroseconds(SCAN_DWELL_US);
+        // Poll during the dwell window so micros() is captured at the moment
+        // of actual receipt, not up to SCAN_DWELL_US later.  The offset matters:
+        // s_nextSlot_us feeds the FOLLOW timing and a 1500µs error here causes
+        // EP1 to consistently miss the first packets after lock and fall back to
+        // SCAN before ever recalibrating.
+        uint32_t dwellEnd = micros() + SCAN_DWELL_US;
+        bool scanGot = false;
+        while ((int32_t)(dwellEnd - micros()) > 0) {
+            if (sxPacketReceived()) { scanGot = true; break; }
+            yield();
+        }
 
-        if (sxPacketReceived()) {
+        if (scanGot) {
             uint16_t lockHop = hopIndex;
             s_nextSlot_us = micros() + ELRS_SLOT_US;
             hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
