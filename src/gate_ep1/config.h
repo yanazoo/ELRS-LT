@@ -29,6 +29,9 @@
 #define FHSS_SEQUENCE_LEN    (FHSS_CHANNEL_COUNT * 3)   // 240: 3 complete blocks per ELRS
 #define ELRS_SLOT_US         4000   // 250Hz default; adjust per packet rate
 #define SX_SWITCH_US         1000   // approx SX1280 frequency switch time
+// ELRS TX stays on each FHSS channel for this many consecutive packets before hopping.
+// Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 250Hz).
+#define FHSS_HOP_INTERVAL    4
 
 // ---- Lock-on tuning ----
 #define SCAN_DWELL_US        1500   // RX dwell per channel during SCAN phase

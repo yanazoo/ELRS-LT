@@ -3,7 +3,8 @@
 // Targets the EP1/EP2 TCXO hardware: ESP8285 HSPI (SCK=14 MOSI=13 MISO=12 NSS=15)
 // + SX1280 (BUSY=5 DIO1=4 RST=2).  Pins are defined in config.h.
 //
-// LoRa configuration is fixed to 250 Hz ELRS 2.4 GHz: SF7 / BW800 / CR4_5.
+// LoRa configuration is fixed to 250 Hz ELRS 2.4 GHz: SF6 / BW800 / CR_LI_4_8.
+// Verified against ELRS 3.6.3 src/src/common.cpp air rate table.
 // Adjust ELRS_LORA_* defines if using a different packet rate.
 //
 // Opcode reference: SX1280 datasheet, section 13 "Radio Control Commands".
@@ -36,17 +37,18 @@
 #define PKT_TYPE_LORA              0x01
 #define STDBY_RC                   0x00
 
-// ---- LoRa modem params for 250 Hz ELRS 2.4 GHz ----
-#define ELRS_LORA_SF               0x70   // SF7
+// ---- LoRa modem params for 250 Hz ELRS 2.4 GHz (verified vs ELRS 3.6.3) ----
+#define ELRS_LORA_SF               0x60   // SF6  (was 0x70=SF7 — wrong)
 #define ELRS_LORA_BW               0x18   // 800 kHz
-#define ELRS_LORA_CR               0x01   // 4/5
-#define ELRS_LORA_PREAMBLE         12     // symbols
-#define ELRS_LORA_PAYLOAD          8      // bytes (250 Hz payload)
+#define ELRS_LORA_CR               0x07   // CR_LI_4_8  (was 0x01=CR_4_5 — wrong)
+#define ELRS_LORA_PREAMBLE         14     // symbols  (was 12 — wrong)
+#define ELRS_LORA_PAYLOAD          8      // bytes (OTA4_PACKET_SIZE)
 #define ELRS_LORA_HEADER_IMPLICIT  0x80
 #define ELRS_LORA_CRC_OFF          0x00
 #define ELRS_LORA_IQ_NORMAL        0x40
-// SF7/8 post-command register patch value (per SX1280 datasheet note)
-#define SF7_8_REG_PATCH            0x37
+// Register 0x925 patch values after SetModulationParams (SX1280 datasheet errata)
+#define SF5_6_REG_PATCH            0x1E   // for SF5 or SF6
+#define SF7_8_REG_PATCH            0x37   // for SF7 or SF8 (kept for reference)
 
 // ---- IRQ bit masks ----
 #define IRQ_RX_DONE                0x0002
@@ -176,20 +178,23 @@ bool sxBegin() {
     uint8_t pktType = PKT_TYPE_LORA;
     writeCmd(SX_CMD_SET_PACKET_TYPE, &pktType, 1);
 
-    // SetModulationParams: SF7 / BW800 / CR4_5
+    // SetModulationParams: SF6 / BW800 / CR_LI_4_8  (250Hz ELRS 3.x)
     uint8_t modParams[3] = { ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR };
     writeCmd(SX_CMD_SET_MOD_PARAMS, modParams, 3);
-    // Datasheet-required register patch for SF7/8 after SetModulationParams.
-    writeReg(REG_SF_ADDITIONAL_CONFIG, SF7_8_REG_PATCH);
+    // Datasheet-required register patch for SF5/6 after SetModulationParams.
+    writeReg(REG_SF_ADDITIONAL_CONFIG, SF5_6_REG_PATCH);
 
-    // SetPacketParams: preamble=12, implicit header, payload=8, CRC off, IQ normal.
+    // SetPacketParams: 7 bytes — preamble is ONE byte (direct symbol count),
+    // matching ELRS SX1280Driver::SetPacketParamsLoRa() from ELRS 3.6.3.
+    // Previous code used two bytes {0x00, 12} which shifted all fields by 1.
     uint8_t pktParams[7] = {
-        0x00, ELRS_LORA_PREAMBLE,   // PreambleLength MSB + LSB (16-bit symbol count)
+        ELRS_LORA_PREAMBLE,         // PreambleLength (single byte = symbol count)
         ELRS_LORA_HEADER_IMPLICIT,  // HeaderType
         ELRS_LORA_PAYLOAD,          // PayloadLength
         ELRS_LORA_CRC_OFF,          // CrcMode
         ELRS_LORA_IQ_NORMAL,        // InvertIQ
-        0x00                        // reserved
+        0x00,                        // reserved
+        0x00                         // reserved
     };
     writeCmd(SX_CMD_SET_PKT_PARAMS, pktParams, 7);
 

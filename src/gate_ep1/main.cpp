@@ -28,6 +28,10 @@ static uint32_t lastReport = 0;
 static SnifferIdentity_t ident = { {0}, false };
 
 static uint32_t s_nextSlot_us = 0;
+// Slot counter within current hop (0..FHSS_HOP_INTERVAL-1).
+// The ELRS TX stays on each channel for FHSS_HOP_INTERVAL consecutive packets
+// before hopping; the sniffer must do the same to stay in sync.
+static uint8_t s_slotInHop = 0;
 
 // ---- Link-quality: rolling window of LQ_WINDOW slots ----
 #define LQ_WINDOW 50
@@ -75,7 +79,7 @@ static void applyProvision() {
         Serial.println();
         // Restart FHSS tracking with new UID from any state.
         fhssGenerate(ident.uid);
-        hopIndex = 0; missStreak = 0;
+        hopIndex = 0; missStreak = 0; s_slotInHop = 0;
         s_lqHead = 0; s_lqSum = 0;
         memset(s_lqBuf, 0, sizeof(s_lqBuf));
         state = ST_SCAN;
@@ -244,8 +248,11 @@ void loop() {
         if (scanGot) {
             uint16_t lockHop = hopIndex;
             s_nextSlot_us = micros() + ELRS_SLOT_US;
-            hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
+            // Don't advance hopIndex yet — stay on the locked channel for the
+            // remainder of the current hop.  s_slotInHop counts received packets
+            // and advances hopIndex every FHSS_HOP_INTERVAL hits.
             missStreak = 0;
+            s_slotInHop = 0;
             state = ST_FOLLOW;
             Serial.print(F("[gate_ep1] locked hop="));
             Serial.print(lockHop);
@@ -281,16 +288,24 @@ void loop() {
                 espnowSendRssi(ident.uid, rssi, lqPct(), now);
                 lastReport = now;
             }
+
+            // Advance FHSS channel every FHSS_HOP_INTERVAL received packets.
+            // The ELRS TX stays on each channel for hopInterval=4 packets (16ms at
+            // 250Hz) before hopping; the sniffer must mirror this exactly.
+            if (++s_slotInHop >= FHSS_HOP_INTERVAL) {
+                s_slotInHop = 0;
+                hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
+            }
         } else {
             lqPush(false);
             s_nextSlot_us += ELRS_SLOT_US;
             if (++missStreak >= MISS_STREAK_RESYNC) {
                 state = ST_SCAN;
+                s_slotInHop = 0;
                 Serial.print(F("[gate_ep1] resync lq="));
                 Serial.println(lqPct());
             }
         }
-        hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
         break;
     }
     }

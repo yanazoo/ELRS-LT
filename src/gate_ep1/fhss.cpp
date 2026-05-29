@@ -1,13 +1,14 @@
 // fhss.cpp - ELRS FHSS sequence generation for 2.4GHz (SX1280).
 //
-// Ported from ExpressLRS src/lib/FHSS/FHSS.cpp + src/include/rng.h.
+// Ported from ExpressLRS 3.x src/lib/FHSS/FHSS.cpp + src/lib/FHSS/random.cpp.
 // Must be byte-for-byte compatible with the ELRS TX the sniffer is tracking.
 //
-// Algorithm summary:
-//   seed    = UID[2] | UID[3]<<8 | UID[4]<<16 | UID[5]<<24  (little-endian)
-//   rng     = xorshift32(seed) — matches ELRS rng.h exactly
+// Algorithm summary (verified against ELRS 3.6.3 source):
+//   seed    = (UID[2]<<24) | (UID[3]<<16) | (UID[4]<<8) | (UID[5]^3)  big-endian + OTA_VERSION_ID=3
+//   rng     = LCG: seed = (214013*seed + 2531011) % 2^31; return seed>>16
+//   sync_ch = FHSS_CHANNEL_COUNT/2 + 1 = 41
 //   sequence built in FHSS_CHANNEL_COUNT-wide blocks:
-//     - block slot 0 = sync channel (FHSS_CHANNEL_COUNT/2 = 40)
+//     - block slot 0 = sync channel (41)
 //     - remaining slots initialized to their index within the block
 //     - then shuffled: for each non-sync slot, swap with a random slot
 //       in [1, FHSS_CHANNEL_COUNT-1] of the same block
@@ -15,16 +16,15 @@
 #include "fhss.h"
 #include "config.h"
 
-// ---- xorshift32 RNG (matches ExpressLRS rng.h) ----
+// ---- LCG RNG matching ExpressLRS src/lib/FHSS/random.cpp ----
+// rng() = (214013*seed + 2531011) % 2^31, returns seed>>16 (range 0..0x7FFF)
 static uint32_t s_seed = 0;
 
 static void rngSeed(uint32_t seed) { s_seed = seed; }
 
-static uint32_t rngNext() {
-    s_seed ^= s_seed << 13;
-    s_seed ^= s_seed >> 17;
-    s_seed ^= s_seed << 5;
-    return s_seed;
+static uint16_t rngNext() {
+    s_seed = (214013UL * s_seed + 2531011UL) % 2147483648UL;
+    return (uint16_t)(s_seed >> 16);
 }
 
 // Returns value in [0, n-1].  Caller adds 1 to get [1, n-1] for intra-block swap.
@@ -42,15 +42,16 @@ static const uint32_t FHSS_FREQ_BASE_HZ = 2400400000UL;
 static const uint32_t FHSS_FREQ_STEP_HZ =    1000000UL;
 
 void fhssGenerate(const uint8_t uid[6]) {
-    // Seed from UID bytes 2-5, little-endian (matches ELRS FHSSrandomiseFHSSsequence caller)
-    uint32_t seed = (uint32_t)uid[2]
-                  | ((uint32_t)uid[3] <<  8)
-                  | ((uint32_t)uid[4] << 16)
-                  | ((uint32_t)uid[5] << 24);
+    // Seed matches ELRS uidMacSeedGet(): big-endian, UID[5] XORed with OTA_VERSION_ID=3.
+    // Verified against ELRS 3.6.3 src/src/common.cpp uidMacSeedGet().
+    uint32_t seed = ((uint32_t)uid[2] << 24)
+                  | ((uint32_t)uid[3] << 16)
+                  | ((uint32_t)uid[4] <<  8)
+                  | ((uint32_t)(uid[5] ^ 3));
     rngSeed(seed);
 
     const uint8_t freq_count = FHSS_CHANNEL_COUNT;   // 80
-    const uint8_t sync_ch    = freq_count / 2;        // 40
+    const uint8_t sync_ch    = freq_count / 2 + 1;   // 41 (matches ELRS 3.x)
 
     // Initialise: sync channel at block-start positions, sequential elsewhere.
     // Matches ELRS FHSSrandomiseFHSSsequenceBuild() initialisation loop.
