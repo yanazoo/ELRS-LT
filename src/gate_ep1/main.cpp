@@ -27,11 +27,6 @@ static uint16_t missStreak = 0;
 static uint32_t lastReport = 0;
 static SnifferIdentity_t ident = { {0}, false };
 
-static uint32_t s_nextSlot_us = 0;
-// Slot counter within current hop (0..FHSS_HOP_INTERVAL-1).
-// The ELRS TX stays on each channel for FHSS_HOP_INTERVAL consecutive packets
-// before hopping; the sniffer must do the same to stay in sync.
-static uint8_t s_slotInHop = 0;
 
 // ---- Link-quality: rolling window of LQ_WINDOW slots ----
 #define LQ_WINDOW 50
@@ -79,7 +74,7 @@ static void applyProvision() {
         Serial.println();
         // Restart FHSS tracking with new UID from any state.
         fhssGenerate(ident.uid);
-        hopIndex = 0; missStreak = 0; s_slotInHop = 0;
+        hopIndex = 0; missStreak = 0;
         s_lqHead = 0; s_lqSum = 0;
         memset(s_lqBuf, 0, sizeof(s_lqBuf));
         state = ST_SCAN;
@@ -233,11 +228,9 @@ void loop() {
 
     case ST_SCAN: {
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
-        // Poll during the dwell window so micros() is captured at the moment
-        // of actual receipt, not up to SCAN_DWELL_US later.  The offset matters:
-        // s_nextSlot_us feeds the FOLLOW timing and a 1500µs error here causes
-        // EP1 to consistently miss the first packets after lock and fall back to
-        // SCAN before ever recalibrating.
+        // Park on this channel for one dwell window and poll for any packet.
+        // SCAN_DWELL_US is set longer than one packet interval so that, if the TX
+        // is currently transmitting on this channel, we are guaranteed to see it.
         uint32_t dwellEnd = micros() + SCAN_DWELL_US;
         bool scanGot = false;
         while ((int32_t)(dwellEnd - micros()) > 0) {
@@ -246,16 +239,11 @@ void loop() {
         }
 
         if (scanGot) {
-            uint16_t lockHop = hopIndex;
-            s_nextSlot_us = micros() + ELRS_SLOT_US;
-            // Don't advance hopIndex yet — stay on the locked channel for the
-            // remainder of the current hop.  s_slotInHop counts received packets
-            // and advances hopIndex every FHSS_HOP_INTERVAL hits.
+            // Stay on the channel we just caught — FOLLOW resumes tracking here.
             missStreak = 0;
-            s_slotInHop = 0;
             state = ST_FOLLOW;
             Serial.print(F("[gate_ep1] locked hop="));
-            Serial.print(lockHop);
+            Serial.print(hopIndex);
             Serial.println(F(" -> FOLLOW"));
         } else {
             hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
@@ -264,48 +252,48 @@ void loop() {
     }
 
     case ST_FOLLOW: {
-        int32_t waitUs = (int32_t)(s_nextSlot_us - SX_SWITCH_US - micros());
-        if (waitUs > 0 && waitUs < (int32_t)ELRS_SLOT_US)
-            delayMicroseconds((uint32_t)waitUs);
-
+        // Per-channel dwell model (robust at 500Hz where a slot is only 2ms and
+        // precise per-packet slot prediction is too brittle): tune once to the
+        // predicted channel, then listen in continuous RX. Count packets until we
+        // have a full hop's worth, or a gap shows the TX has hopped on, then step
+        // hopIndex to the next channel in the FHSS sequence.
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
-        uint32_t deadline = s_nextSlot_us + ELRS_SLOT_US - SX_SWITCH_US - 500U;
-        bool got = false;
-        while ((int32_t)(deadline - micros()) > 0) {
-            if (sxPacketReceived()) { got = true; break; }
+        uint32_t dwellStart = micros();
+        uint32_t lastRxUs   = dwellStart;
+        uint8_t  rxCount    = 0;
+        const uint32_t hardCap = (uint32_t)ELRS_SLOT_US * (FHSS_HOP_INTERVAL + 2);
+        const uint32_t gapUs   = (uint32_t)ELRS_SLOT_US * 2;   // 2 missed slots = hopped
+
+        while (rxCount < FHSS_HOP_INTERVAL &&
+               (uint32_t)(micros() - dwellStart) < hardCap) {
+            if (sxPacketReceived()) {
+                rxCount++;
+                lastRxUs = micros();
+                lqPush(true);
+                int8_t   rssi = sxReadRssi();
+                uint32_t now  = millis();
+                if (now - lastReport >= RSSI_REPORT_MS) {
+                    espnowSendRssi(ident.uid, rssi, lqPct(), now);
+                    lastReport = now;
+                }
+            } else if (rxCount > 0 && (uint32_t)(micros() - lastRxUs) > gapUs) {
+                break;   // had packets then a gap → TX moved to the next channel
+            }
             yield();
         }
 
-        if (got) {
-            s_nextSlot_us = micros() + ELRS_SLOT_US;
+        if (rxCount > 0) {
             missStreak = 0;
-            lqPush(true);
-
-            int8_t   rssi = sxReadRssi();
-            uint32_t now  = millis();
-            if (now - lastReport >= RSSI_REPORT_MS) {
-                espnowSendRssi(ident.uid, rssi, lqPct(), now);
-                lastReport = now;
-            }
-
-            // Advance FHSS channel every FHSS_HOP_INTERVAL received packets.
-            // The ELRS TX stays on each channel for hopInterval=4 packets (16ms at
-            // 250Hz) before hopping; the sniffer must mirror this exactly.
-            if (++s_slotInHop >= FHSS_HOP_INTERVAL) {
-                s_slotInHop = 0;
-                hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
-            }
         } else {
             lqPush(false);
-            s_nextSlot_us += ELRS_SLOT_US;
             if (++missStreak >= MISS_STREAK_RESYNC) {
                 state = ST_SCAN;
-                s_slotInHop = 0;
                 Serial.print(F("[gate_ep1] resync lq="));
                 Serial.println(lqPct());
             }
         }
+        hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
         break;
     }
     }

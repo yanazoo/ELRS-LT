@@ -3,9 +3,12 @@
 // Targets the EP1/EP2 TCXO hardware: ESP8285 HSPI (SCK=14 MOSI=13 MISO=12 NSS=15)
 // + SX1280 (BUSY=5 DIO1=4 RST=2).  Pins are defined in config.h.
 //
-// LoRa configuration is fixed to 250 Hz ELRS 2.4 GHz: SF6 / BW800 / CR_LI_4_8.
+// LoRa configuration is fixed to 500 Hz ELRS 2.4 GHz: SF5 / BW800 / CR_LI_4_6.
 // Verified against ELRS 3.6.3 src/src/common.cpp air rate table.
-// Adjust ELRS_LORA_* defines if using a different packet rate.
+// Other 2.4GHz rates (change ELRS_LORA_* + ELRS_SLOT_US together):
+//   500Hz: SF5(0x50) CR_LI_4_6(0x06) preamble12  slot 2000us  <-- ACTIVE
+//   250Hz: SF6(0x60) CR_LI_4_8(0x07) preamble14  slot 4000us
+//   150Hz: SF7(0x70) CR_LI_4_8(0x07) preamble12  slot 6666us
 //
 // Opcode reference: SX1280 datasheet, section 13 "Radio Control Commands".
 
@@ -37,11 +40,11 @@
 #define PKT_TYPE_LORA              0x01
 #define STDBY_RC                   0x00
 
-// ---- LoRa modem params for 250 Hz ELRS 2.4 GHz (verified vs ELRS 3.6.3) ----
-#define ELRS_LORA_SF               0x60   // SF6  (was 0x70=SF7 — wrong)
+// ---- LoRa modem params for 500 Hz ELRS 2.4 GHz (verified vs ELRS 3.6.3) ----
+#define ELRS_LORA_SF               0x50   // SF5  (500Hz)
 #define ELRS_LORA_BW               0x18   // 800 kHz
-#define ELRS_LORA_CR               0x07   // CR_LI_4_8  (was 0x01=CR_4_5 — wrong)
-#define ELRS_LORA_PREAMBLE         14     // symbols  (was 12 — wrong)
+#define ELRS_LORA_CR               0x06   // CR_LI_4_6  (500Hz)
+#define ELRS_LORA_PREAMBLE         12     // symbols  (500Hz)
 #define ELRS_LORA_PAYLOAD          8      // bytes (OTA4_PACKET_SIZE)
 #define ELRS_LORA_HEADER_IMPLICIT  0x80
 #define ELRS_LORA_CRC_OFF          0x00
@@ -178,7 +181,7 @@ bool sxBegin() {
     uint8_t pktType = PKT_TYPE_LORA;
     writeCmd(SX_CMD_SET_PACKET_TYPE, &pktType, 1);
 
-    // SetModulationParams: SF6 / BW800 / CR_LI_4_8  (250Hz ELRS 3.x)
+    // SetModulationParams: SF5 / BW800 / CR_LI_4_6  (500Hz ELRS 3.x)
     uint8_t modParams[3] = { ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR };
     writeCmd(SX_CMD_SET_MOD_PARAMS, modParams, 3);
     // Datasheet-required register patch for SF5/6 after SetModulationParams.

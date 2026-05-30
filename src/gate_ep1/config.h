@@ -25,19 +25,22 @@
 // A solid LED with the TX off = the unit is sitting in bootloader mode.
 
 // ---- ELRS / FHSS ----
+// Packet-rate dependent timing. Must match the TX (see sx1280_sniffer.cpp for
+// the matching SF/CR/preamble). Currently configured for 500Hz.
+//   500Hz: ELRS_SLOT_US 2000   250Hz: 4000   150Hz: 6666
 #define FHSS_CHANNEL_COUNT   80                          // 2.4GHz ISM unique channels
 #define FHSS_SEQUENCE_LEN    (FHSS_CHANNEL_COUNT * 3)   // 240: 3 complete blocks per ELRS
-#define ELRS_SLOT_US         4000   // 250Hz default; adjust per packet rate
-// SetStandby + SetRfFrequency + SetRx takes ~600-900 µs in practice.
-// Keep this value < ELRS_SLOT_US/2 so the polling window stays positive.
-#define SX_SWITCH_US         1500   // frequency switch budget (increased for SetStandby)
+#define ELRS_SLOT_US         2000   // 500Hz: 2 ms per packet
+#define SX_SWITCH_US          500   // approx SX1280 standby+freq+rx round trip
 // ELRS TX stays on each FHSS channel for this many consecutive packets before hopping.
-// Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 250Hz).
+// Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 500Hz).
 #define FHSS_HOP_INTERVAL    4
 
 // ---- Lock-on tuning ----
-#define SCAN_DWELL_US        1500   // RX dwell per channel during SCAN phase
-#define MISS_STREAK_RESYNC   50     // consecutive misses -> drop back to SCAN (200ms at 250Hz)
+// SCAN dwell must exceed one packet interval (500Hz = 2000us) so a parked
+// channel reliably catches a packet while the TX is transmitting on it.
+#define SCAN_DWELL_US        2600   // RX dwell per channel during SCAN phase
+#define MISS_STREAK_RESYNC    8     // consecutive empty channel dwells -> back to SCAN
 
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
