@@ -45,6 +45,28 @@
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
+// ---- ELRS OTA sync-channel auto-discovery ----
+// Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
+// Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
+#define SYNC_CHANNEL_IDX       41
+#define SYNC_FREQ_HZ           2441400000UL
+
+// Byte offsets inside the 8-byte ELRS OTA SYNC packet (LoRa SF5, 500 Hz).
+// From ELRS 3.6.3 OTA.h (OTA_Sync_s packed struct, LE byte order):
+//   byte 0: fhssIndex  byte 1: nonce  bytes 2-3: tlmDenom+radioType+rateIndex
+//   byte 4: UID[4]     byte 5: UID[5]  bytes 6-7: type+CRC
+// If the byte positions are wrong the brute-force will produce no candidates;
+// adjust OTA_SYNC_UID4_BYTE / OTA_SYNC_UID5_BYTE and reflash.
+#define OTA_SYNC_FHSS_IDX_BYTE  0
+#define OTA_SYNC_UID4_BYTE      4
+#define OTA_SYNC_UID5_BYTE      5
+
+// Hop-scan length for auto-discovery.
+// 240 hops × 8 ms = 1.92 s; expected ~3 lucky hits out of 240.
+#define AUTO_SCAN_HOPS        240
+// Maximum stored "packet received" observations (expected ~3–6 per scan).
+#define AUTO_MAX_GOT_OBS       12
+
 // ---- ESP-NOW channel (must match Gate Node ESPNOW_CHANNEL) ----
 #define ESPNOW_CHANNEL       1
 

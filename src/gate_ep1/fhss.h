@@ -15,3 +15,7 @@ uint32_t fhssFreqHz(uint8_t channelIndex);
 
 // Total number of entries in the generated sequence.
 uint16_t fhssSequenceLength();
+
+// Compute the channel at hopIndex for a given 32-bit seed without touching
+// global sequence state.  Used by UID auto-discovery brute-force.
+uint8_t fhssChannelFromSeed(uint32_t seed, uint16_t hopIndex);

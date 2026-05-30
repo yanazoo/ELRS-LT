@@ -83,3 +83,36 @@ uint32_t fhssFreqHz(uint8_t channelIndex) {
 }
 
 uint16_t fhssSequenceLength() { return FHSS_SEQUENCE_LEN; }
+
+uint8_t fhssChannelFromSeed(uint32_t seed, uint16_t hopIndex) {
+    const uint8_t freq_count = FHSS_CHANNEL_COUNT;  // 80
+    const uint8_t sync_ch    = freq_count / 2 + 1;  // 41
+
+    uint16_t blk    = hopIndex / freq_count;
+    uint8_t  offset = (uint8_t)(hopIndex % freq_count);
+
+    // Slot 0 of every block is always sync_ch — no RNG consumed.
+    if (offset == 0) return sync_ch;
+
+    uint32_t lcg = seed;
+
+    // Advance LCG past all blocks before the target (79 calls per block).
+    for (uint16_t b = 0; b < blk; b++) {
+        for (uint8_t j = 1; j < freq_count; j++)
+            lcg = (214013UL * lcg + 2531011UL) % 2147483648UL;
+    }
+
+    // Build the target block and apply its Fisher-Yates shuffle.
+    static uint8_t tmp[FHSS_CHANNEL_COUNT];
+    for (uint8_t i = 0; i < freq_count; i++) {
+        if      (i == 0)       tmp[i] = sync_ch;
+        else if (i == sync_ch) tmp[i] = 0;
+        else                   tmp[i] = i;
+    }
+    for (uint8_t i = 1; i < freq_count; i++) {
+        lcg = (214013UL * lcg + 2531011UL) % 2147483648UL;
+        uint8_t r = (uint8_t)((uint16_t)(lcg >> 16) % (uint16_t)(freq_count - 1)) + 1;
+        uint8_t t = tmp[i]; tmp[i] = tmp[r]; tmp[r] = t;
+    }
+    return tmp[offset];
+}

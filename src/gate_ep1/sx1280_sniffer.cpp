@@ -19,6 +19,8 @@
 
 // ---- SX1280 command opcodes ----
 #define SX_CMD_GET_STATUS          0xC0
+#define SX_CMD_GET_RX_BUFFER_STS   0x17
+#define SX_CMD_READ_BUFFER         0x1E
 #define SX_CMD_SET_STANDBY         0x80
 #define SX_CMD_SET_PACKET_TYPE     0x8A
 #define SX_CMD_SET_RF_FREQUENCY    0x86
@@ -243,6 +245,25 @@ void sxSetFrequencyHz(uint32_t freqHz) {
 
 int8_t sxReadRssi() {
     return s_last_rssi;
+}
+
+uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen) {
+    // GetRxBufferStatus returns: [status(ignored), payloadLen, rxStartBufPtr]
+    uint8_t sts[2] = {};
+    readCmd(SX_CMD_GET_RX_BUFFER_STS, sts, 2);
+    uint8_t payloadLen = sts[0];
+    uint8_t startPtr   = sts[1];
+    uint8_t n = (payloadLen < maxLen) ? payloadLen : maxLen;
+    if (n == 0) return 0;
+
+    busyWait();
+    digitalWrite(SX_PIN_NSS, LOW);
+    SPI.transfer(SX_CMD_READ_BUFFER);
+    SPI.transfer(startPtr);  // buffer offset
+    SPI.transfer(0x00);      // NOP status byte
+    for (uint8_t i = 0; i < n; i++) buf[i] = SPI.transfer(0x00);
+    digitalWrite(SX_PIN_NSS, HIGH);
+    return n;
 }
 
 bool sxPacketReceived() {

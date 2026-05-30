@@ -38,8 +38,16 @@ void resetPilots() {
 }
 
 int findPilotByUID(const uint8_t* uid) {
+    // Full 6-byte match (normal provisioned case).
     for (int i = 0; i < MAX_PILOTS; i++) {
         if (pilots[i].hasUid && memcmp(pilots[i].uid, uid, 6) == 0) return i;
+    }
+    // Auto-discovered EP1 sets uid[0:1]=0x00 (unused by FHSS seed).
+    // Fall back to matching on uid[2:5] (the bytes that determine FHSS).
+    if (uid[0] == 0 && uid[1] == 0) {
+        for (int i = 0; i < MAX_PILOTS; i++) {
+            if (pilots[i].hasUid && memcmp(pilots[i].uid + 2, uid + 2, 4) == 0) return i;
+        }
     }
     return -1;
 }

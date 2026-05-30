@@ -15,3 +15,7 @@ int8_t sxReadRssi();
 
 // True if a packet was received since the last check (sync detection).
 bool sxPacketReceived();
+
+// Read the payload of the last received packet into buf (up to maxLen bytes).
+// Returns the number of bytes actually copied.  Call after sxPacketReceived().
+uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen);
