@@ -11,6 +11,13 @@
 //
 // This EP1 sends a GateEP1BeaconPacket_t every BEACON_INTERVAL_MS so the
 // Gate Node can discover its MAC and relay it to the Web UI for assignment.
+//
+// Auto-discovery reads an ELRS OTA SYNC packet (type 0x02 in byte[0] bits[1:0])
+// to learn fhssIndex (byte[1]), UID[3] (byte[4]), UID[4] (byte[5]), and the top
+// 2 bits of UID[5] (byte[6] bits[7:6]).  Unknown fields: UID[2] (256 values) ×
+// UID[5] lower 6 bits (64 values) = 16,384 brute-force candidates.
+// FHSS seed = (UID[2]<<24)|(UID[3]<<16)|(UID[4]<<8)|(UID[5]^3).
+// UID[0:1] are always 0x00 in ELRS and are not part of the seed.
 
 #include <Arduino.h>
 #include "config.h"
@@ -41,15 +48,15 @@ static uint8_t       s_pendingUid[6] = {};
 // Not compiled in BRINGUP_UID builds (single-pilot bring-up).
 //
 // Algorithm:
-//   SYNC_WAIT  — park on ch41 (ELRS sync channel), wait for any packet, read
-//                8-byte OTA payload to extract fhssIndex + UID[4:5].
+//   SYNC_WAIT  — park on ch41 (ELRS sync channel), read OTA SYNC packets
+//                (byte[0]&0x03==0x02) to extract fhssIndex + UID[3:4] + UID[5]hi.
 //   HOP_SCAN   — rotate through ch0..79, 8 ms dwell per hop for AUTO_SCAN_HOPS
 //                hops; record every hop where a packet is actually received.
-//   BRUTE_FORCE— try all 65536 (UID[2],UID[3]) combinations; keep only the
+//   BRUTE_FORCE— try all 16384 (UID[2] × UID[5]lo) combinations; keep only the
 //                candidate(s) whose FHSS sequence predicts the observed channels
 //                at the observed hop offsets.  One match → done.
 //
-// UID[0:1] are not part of the FHSS seed, so they are set to 0x00.
+// UID[0:1] are always 0x00 in ELRS and are not part of the FHSS seed.
 // gate_node pilots.cpp matches on uid[2:5] when uid[0:1] are both zero.
 #ifndef BRINGUP_UID
 
@@ -60,8 +67,10 @@ struct AutoGotObs { uint16_t hopOffset; uint8_t channel; };
 static struct {
     AutoPhase   phase;
     bool        syncParked;     // radio already tuned to sync ch — don't retune
-    uint8_t     uid4, uid5;     // from OTA SYNC packet
-    uint8_t     syncFhssIdx;    // fhssIndex from OTA SYNC packet
+    uint8_t     uid3;           // UID[3] from OTA SYNC byte[4]
+    uint8_t     uid4;           // UID[4] from OTA SYNC byte[5]
+    uint8_t     uid5hi;         // UID[5] bits[7:6] from OTA SYNC byte[6]&0xC0
+    uint8_t     syncFhssIdx;    // fhssIndex from OTA SYNC byte[1]
     AutoGotObs  obs[AUTO_MAX_GOT_OBS];
     uint8_t     obsCount;
     uint16_t    hopOffset;      // hops elapsed since SYNC capture
@@ -74,25 +83,26 @@ static void autoReset() {
     // phase = AUTO_SYNC_WAIT (== 0), syncParked = false (== 0)
 }
 
-// Brute-force UID[2:3]: test all 65536 seeds against stored observations.
-// Returns true and fills ident if exactly one candidate matches.
-// Aborts early (returns false) if s_newProvision is set by ESP-NOW ISR.
+// Brute-force UID[2] and UID[5] lower 6 bits: test all 16384 seeds against
+// stored observations.  Returns true and fills ident if exactly one candidate
+// matches.  Aborts early (returns false) if s_newProvision is set by ESP-NOW ISR.
 static bool autoBruteForce() {
     if (s_auto.obsCount == 0) return false;
 
-    uint8_t foundU2 = 0, foundU3 = 0;
+    uint8_t foundU2 = 0, foundU5lo = 0;
     uint8_t matchCount = 0;
 
-    for (uint32_t idx = 0; idx < 65536UL; idx++) {
+    for (uint32_t idx = 0; idx < AUTO_CANDIDATE_COUNT; idx++) {
         // Check for incoming ESP-NOW provision — abort if one arrived.
         if (s_newProvision) return false;
 
-        uint8_t  u2   = (uint8_t)(idx >> 8);
-        uint8_t  u3   = (uint8_t)(idx & 0xFF);
-        uint32_t seed = ((uint32_t)u2   << 24)
-                      | ((uint32_t)u3   << 16)
-                      | ((uint32_t)s_auto.uid4  <<  8)
-                      | ((uint32_t)(s_auto.uid5 ^ 3));
+        uint8_t  uid2   = (uint8_t)(idx >> 6);
+        uint8_t  uid5lo = (uint8_t)(idx & 0x3F);
+        uint8_t  uid5   = s_auto.uid5hi | uid5lo;
+        uint32_t seed   = ((uint32_t)uid2          << 24)
+                        | ((uint32_t)s_auto.uid3   << 16)
+                        | ((uint32_t)s_auto.uid4   <<  8)
+                        | ((uint32_t)(uid5 ^ 3));
 
         bool ok = true;
         for (uint8_t o = 0; o < s_auto.obsCount; o++) {
@@ -103,9 +113,9 @@ static bool autoBruteForce() {
                 ok = false; break;
             }
         }
-        if (ok) { foundU2 = u2; foundU3 = u3; matchCount++; }
+        if (ok) { foundU2 = uid2; foundU5lo = uid5lo; matchCount++; }
 
-        if ((idx & 0xFFu) == 0xFFu) yield();   // feed WDT every 256 candidates
+        if ((idx & 0x7Fu) == 0x7Fu) yield();   // feed WDT every 128 candidates
     }
 
     if (matchCount != 1) {
@@ -115,12 +125,15 @@ static bool autoBruteForce() {
     }
 
     // Unique candidate found: UID[0:1] are unused by FHSS seed → set to 0x00.
+    uint8_t uid5 = s_auto.uid5hi | foundU5lo;
     ident.uid[0] = 0x00; ident.uid[1] = 0x00;
-    ident.uid[2] = foundU2; ident.uid[3] = foundU3;
-    ident.uid[4] = s_auto.uid4;  ident.uid[5] = s_auto.uid5;
+    ident.uid[2] = foundU2;
+    ident.uid[3] = s_auto.uid3;
+    ident.uid[4] = s_auto.uid4;
+    ident.uid[5] = uid5;
     ident.valid  = true;
     Serial.printf("[gate_ep1] auto-discovered uid=[00:00:%02X:%02X:%02X:%02X]\n",
-                  foundU2, foundU3, s_auto.uid4, s_auto.uid5);
+                  foundU2, s_auto.uid3, s_auto.uid4, uid5);
     return true;
 }
 
@@ -129,7 +142,7 @@ static bool autoBruteForce() {
 static void autoStep() {
     switch (s_auto.phase) {
 
-    // ---- Phase 1: park on sync channel, wait for packet ----
+    // ---- Phase 1: park on sync channel, wait for ELRS SYNC packet ----
     case AUTO_SYNC_WAIT:
         if (!s_auto.syncParked) {
             sxSetFrequencyHz(SYNC_FREQ_HZ);
@@ -139,16 +152,20 @@ static void autoStep() {
         if (sxPacketReceived()) {
             uint8_t buf[8] = {};
             sxReadPayload(buf, 8);
-            s_auto.syncFhssIdx = buf[OTA_SYNC_FHSS_IDX_BYTE];
-            s_auto.uid4        = buf[OTA_SYNC_UID4_BYTE];
-            s_auto.uid5        = buf[OTA_SYNC_UID5_BYTE];
+            // Only accept ELRS SYNC packets: byte[0] bits[1:0] == 0x02.
+            if ((buf[0] & OTA_TYPE_MASK) != OTA_TYPE_SYNC) break;
+            s_auto.syncFhssIdx = buf[OTA_SYNC_FHSS_BYTE];                    // byte[1]
+            s_auto.uid3        = buf[OTA_SYNC_UID3_BYTE];                    // byte[4]
+            s_auto.uid4        = buf[OTA_SYNC_UID4_BYTE];                    // byte[5]
+            s_auto.uid5hi      = buf[OTA_SYNC_UID5_BYTE] & OTA_SYNC_UID5_HIBITS; // byte[6]&0xC0
             s_auto.obsCount    = 0;
             s_auto.hopOffset   = 0;
             s_auto.scanChan    = 0;
             s_auto.dwellEnd    = 0;
             s_auto.phase       = AUTO_HOP_SCAN;
-            Serial.printf("[gate_ep1] auto: sync fhssIdx=%u uid4=%02X uid5=%02X\n",
-                          (unsigned)s_auto.syncFhssIdx, s_auto.uid4, s_auto.uid5);
+            Serial.printf("[gate_ep1] auto: sync fhssIdx=%u uid3=%02X uid4=%02X uid5hi=%02X\n",
+                          (unsigned)s_auto.syncFhssIdx,
+                          s_auto.uid3, s_auto.uid4, s_auto.uid5hi);
         }
         break;
 
@@ -407,9 +424,9 @@ void loop() {
         }
 #ifndef BRINGUP_UID
         else {
-            // Auto-discovery: reads SYNC OTA packet, scans 240 hops,
-            // brute-forces UID[2:3].  Aborted immediately if ESP-NOW
-            // provision arrives (applyProvision() runs at top of loop()).
+            // Auto-discovery: reads OTA SYNC packet for UID[3:4]+UID[5]hi,
+            // scans AUTO_SCAN_HOPS hops, brute-forces UID[2]+UID[5]lo.
+            // Aborted immediately if ESP-NOW provision arrives.
             autoStep();
             if (s_auto.phase == AUTO_DONE) {
                 fhssGenerate(ident.uid);

@@ -48,24 +48,41 @@
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
 // Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
-#define SYNC_CHANNEL_IDX       41
-#define SYNC_FREQ_HZ           2441400000UL
+#define SYNC_CHANNEL_IDX        41
+#define SYNC_FREQ_HZ            2441400000UL
 
-// Byte offsets inside the 8-byte ELRS OTA SYNC packet (LoRa SF5, 500 Hz).
-// From ELRS 3.6.3 OTA.h (OTA_Sync_s packed struct, LE byte order):
-//   byte 0: fhssIndex  byte 1: nonce  bytes 2-3: tlmDenom+radioType+rateIndex
-//   byte 4: UID[4]     byte 5: UID[5]  bytes 6-7: type+CRC
-// If the byte positions are wrong the brute-force will produce no candidates;
-// adjust OTA_SYNC_UID4_BYTE / OTA_SYNC_UID5_BYTE and reflash.
-#define OTA_SYNC_FHSS_IDX_BYTE  0
-#define OTA_SYNC_UID4_BYTE      4
-#define OTA_SYNC_UID5_BYTE      5
+// ELRS 3.x 8-byte OTA packet layout (verified from OTA.h + rx_main.cpp):
+//   byte[0]: packetType[1:0] | crcHigh[7:2]
+//            0b00=RC_DATA  0b01=MSP  0b10=SYNC  0b11=TLM
+// SYNC packet (byte[0] & 0x03 == 0x02):
+//   byte[1]  fhssIndex    – TX's current hop counter in FHSS sequence
+//   byte[2]  nonce        – packet timing counter
+//   byte[3]  switchEncMode[0] | tlmRatio[3:1] | rateIndex[7:4]
+//   byte[4]  UID[3]       – full byte (known after capture)
+//   byte[5]  UID[4]       – full byte (known after capture)
+//   byte[6]  UID5_field   – (UID[5] & 0xC0) | (modelId & 0x3F)
+//            Only bits[7:6] carry UID[5]; bits[5:0] = model match ID
+//   byte[7]  crcLow
+#define OTA_TYPE_MASK           0x03
+#define OTA_TYPE_SYNC           0x02
+#define OTA_SYNC_FHSS_BYTE      1
+#define OTA_SYNC_UID3_BYTE      4
+#define OTA_SYNC_UID4_BYTE      5
+#define OTA_SYNC_UID5_BYTE      6
+#define OTA_SYNC_UID5_HIBITS    0xC0   // only bits[7:6] of byte[6] are UID[5]
 
-// Hop-scan length for auto-discovery.
-// 240 hops × 8 ms = 1.92 s; expected ~3 lucky hits out of 240.
-#define AUTO_SCAN_HOPS        240
-// Maximum stored "packet received" observations (expected ~3–6 per scan).
-#define AUTO_MAX_GOT_OBS       12
+// Auto-discovery candidate space:
+//   UID[0:1] = 0x00 always (ELRS convention)
+//   UID[3:4] = known from SYNC packet
+//   UID[5] bits[7:6] = known; bits[5:0] = unknown (64 values)
+//   UID[2]  = fully unknown (256 values)
+//   Total: 256 × 64 = 16384 candidates
+// Candidate index: uid[2]*64 + (uid[5]&0x3F)
+#define AUTO_CANDIDATE_COUNT    16384
+// Scan length: 320 hops × 8 ms = 2.56 s → expected ~4 lucky hits.
+// Each "got" hit narrows: 16384→205→3→1.
+#define AUTO_SCAN_HOPS          320
+#define AUTO_MAX_GOT_OBS        8
 
 // ---- ESP-NOW channel (must match Gate Node ESPNOW_CHANNEL) ----
 #define ESPNOW_CHANNEL       1
