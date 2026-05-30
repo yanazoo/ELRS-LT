@@ -184,6 +184,10 @@ bool sxBegin() {
     // Datasheet-required register patch for SF5/6 after SetModulationParams.
     writeReg(REG_SF_ADDITIONAL_CONFIG, SF5_6_REG_PATCH);
 
+    Serial.printf("[sx] config: SF=0x%02X BW=0x%02X CR=0x%02X preamble=%d payload=%d\n",
+                  ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR,
+                  ELRS_LORA_PREAMBLE, ELRS_LORA_PAYLOAD);
+
     // SetPacketParams: 7 bytes — preamble is ONE byte (direct symbol count),
     // matching ELRS SX1280Driver::SetPacketParamsLoRa() from ELRS 3.6.3.
     // Previous code used two bytes {0x00, 12} which shifted all fields by 1.
@@ -212,6 +216,13 @@ bool sxBegin() {
 }
 
 void sxSetFrequencyHz(uint32_t freqHz) {
+    // SX1280 datasheet: SetRfFrequency is only valid in Standby mode.
+    // Without this SetStandby, the chip ignores SetRfFrequency when called
+    // from RX mode (e.g., after a SCAN dwell or a FOLLOW miss), leaving the
+    // radio stuck on the first channel forever.
+    uint8_t stdby = STDBY_RC;
+    writeCmd(SX_CMD_SET_STANDBY, &stdby, 1);
+
     uint32_t regFreq = (uint32_t)((double)freqHz / FREQ_STEP);
 
     // SetRfFrequency: 3-byte big-endian register value.

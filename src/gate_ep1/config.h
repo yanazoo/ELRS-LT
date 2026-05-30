@@ -28,7 +28,9 @@
 #define FHSS_CHANNEL_COUNT   80                          // 2.4GHz ISM unique channels
 #define FHSS_SEQUENCE_LEN    (FHSS_CHANNEL_COUNT * 3)   // 240: 3 complete blocks per ELRS
 #define ELRS_SLOT_US         4000   // 250Hz default; adjust per packet rate
-#define SX_SWITCH_US         1000   // approx SX1280 frequency switch time
+// SetStandby + SetRfFrequency + SetRx takes ~600-900 µs in practice.
+// Keep this value < ELRS_SLOT_US/2 so the polling window stays positive.
+#define SX_SWITCH_US         1500   // frequency switch budget (increased for SetStandby)
 // ELRS TX stays on each FHSS channel for this many consecutive packets before hopping.
 // Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 250Hz).
 #define FHSS_HOP_INTERVAL    4
