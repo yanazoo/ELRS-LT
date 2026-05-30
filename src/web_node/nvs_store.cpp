@@ -6,6 +6,7 @@ PilotRoster roster[MAX_REGISTERED];
 CalibConfig rosterCal[MAX_REGISTERED];
 int         rosterCount   = 0;
 int         activePilots[MAX_ACTIVE];
+char        slotEp1Mac[MAX_ACTIVE][18] = {};
 Preferences prefs;
 
 void saveRosterPilot(int i) {
@@ -78,6 +79,25 @@ void loadActiveConfig() {
         char key[4]; snprintf(key, sizeof(key), "a%d", s);
         int ri = prefs.getInt(key, -1);
         activePilots[s] = (ri >= 0 && ri < rosterCount) ? ri : -1;
+    }
+    prefs.end();
+}
+
+void saveSlotEp1(int slot) {
+    if (slot < 0 || slot >= MAX_ACTIVE) return;
+    prefs.begin("ep1slots", false);
+    char key[4]; snprintf(key, sizeof(key), "s%d", slot);
+    prefs.putString(key, slotEp1Mac[slot]);
+    prefs.end();
+}
+
+void loadSlotEp1Config() {
+    prefs.begin("ep1slots", true);
+    for (int s = 0; s < MAX_ACTIVE; s++) {
+        char key[4]; snprintf(key, sizeof(key), "s%d", s);
+        String v = prefs.getString(key, "");
+        if (v.length() == 17) strncpy(slotEp1Mac[s], v.c_str(), 18);
+        else slotEp1Mac[s][0] = '\0';
     }
     prefs.end();
 }

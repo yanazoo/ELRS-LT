@@ -408,6 +408,60 @@ void registerHttpRoutes() {
                 });
         });
 
+    // ── GET /api/ep1/slots ────────────────────────────────────────────────────
+    server.on("/api/ep1/slots", HTTP_GET, [](AsyncWebServerRequest* req) {
+        char buf[120];
+        snprintf(buf, sizeof(buf),
+                 R"({"slots":["%s","%s","%s","%s"]})",
+                 slotEp1Mac[0], slotEp1Mac[1], slotEp1Mac[2], slotEp1Mac[3]);
+        req->send(200, "application/json", buf);
+    });
+
+    // ── POST /api/ep1/slots ───────────────────────────────────────────────────
+    server.on("/api/ep1/slots", HTTP_POST, [](AsyncWebServerRequest*){},
+        nullptr,
+        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t idx, size_t total){
+            handleBody(req, data, len, idx, total,
+                [](AsyncWebServerRequest* req2, const char* body){
+                    JsonDocument doc;
+                    if (deserializeJson(doc, body) != DeserializationError::Ok)
+                        { req2->send(400,"application/json",R"({"error":"bad json"})"); return; }
+                    JsonArray slots = doc["slots"].as<JsonArray>();
+                    if (!slots)
+                        { req2->send(400,"application/json",R"({"error":"no slots"})"); return; }
+                    for (int s = 0; s < MAX_ACTIVE && s < (int)slots.size(); s++) {
+                        const char* mac = slots[s].as<const char*>();
+                        if (mac && strlen(mac) == 17) strncpy(slotEp1Mac[s], mac, 18);
+                        else slotEp1Mac[s][0] = '\0';
+                        saveSlotEp1(s);
+                    }
+                    sendAllEp1Provisions();
+                    req2->send(200,"application/json",R"({"ok":true})");
+                });
+        });
+
+    // ── POST /api/ep1/provision ───────────────────────────────────────────────
+    server.on("/api/ep1/provision", HTTP_POST, [](AsyncWebServerRequest*){},
+        nullptr,
+        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t idx, size_t total){
+            handleBody(req, data, len, idx, total,
+                [](AsyncWebServerRequest* req2, const char* body){
+                    JsonDocument doc;
+                    if (deserializeJson(doc, body) != DeserializationError::Ok)
+                        { req2->send(400,"application/json",R"({"error":"bad json"})"); return; }
+                    const char* mac = doc["mac"] | "";
+                    const char* uid = doc["uid"] | "";
+                    if (strlen(mac) != 17 || strlen(uid) != 17)
+                        { req2->send(400,"application/json",R"({"error":"bad mac/uid"})"); return; }
+                    char buf[96];
+                    snprintf(buf, sizeof(buf),
+                             R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
+                             mac, uid);
+                    Serial1.println(buf);
+                    req2->send(200,"application/json",R"({"ok":true})");
+                });
+        });
+
     // ── Static files (last — after all API and captive portal routes) ──────────
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache");
 

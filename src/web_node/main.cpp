@@ -28,6 +28,7 @@ void setup() {
     memset(rt, 0, sizeof(rt));
     loadRosterConfig();
     loadActiveConfig();
+    loadSlotEp1Config();
 
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);

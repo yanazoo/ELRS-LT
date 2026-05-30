@@ -59,6 +59,23 @@ void updateScanMac(const char* mac, int rssi) {
     }
 }
 
+void sendEp1ProvisionForSlot(int slot) {
+    if (!slotEp1Mac[slot][0]) return;
+    int ri = activePilots[slot];
+    if (ri < 0 || ri >= rosterCount || !roster[ri].hasUid) return;
+    char uid[18]; uidToStr(roster[ri].uid, uid);
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
+             slotEp1Mac[slot], uid);
+    Serial1.println(buf);
+    Serial.printf("[Web] auto-provision slot=%d ep1=%s uid=%s\n", slot, slotEp1Mac[slot], uid);
+}
+
+void sendAllEp1Provisions() {
+    for (int s = 0; s < MAX_ACTIVE; s++) sendEp1ProvisionForSlot(s);
+}
+
 void sendGateCooldown() {
     char buf[64];
     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"set_cooldown","ms":%lu})", (unsigned long)cooldownMs);
@@ -94,6 +111,7 @@ void sendGatePilot(int slot) {
     serializeJson(doc, Serial1);
     Serial1.print('\n');
     delay(30);
+    sendEp1ProvisionForSlot(slot);
 }
 
 void sendGateThreshold(int slot) {
@@ -127,6 +145,31 @@ void processGateLine(const String& line) {
     if (strcmp(type, "sd_status") == 0) {
         sdPresent = doc["present"] | false;
         wsText(line);
+        return;
+    }
+    if (strcmp(type, "ep1_hello") == 0) {
+        wsText(line);
+        int ep1State  = doc["state"] | -1;
+        const char* mac = doc["mac"] | "";
+        if (ep1State >= 0 && ep1State <= 1 && strlen(mac) == 17) {
+            for (int s = 0; s < MAX_ACTIVE; s++) {
+                if (strcmp(slotEp1Mac[s], mac) != 0) continue;
+                if (ep1State == 0) {
+                    // EP1 has no UID yet — send provision immediately
+                    sendEp1ProvisionForSlot(s);
+                } else {
+                    // EP1 is scanning — re-provision if its UID doesn't match
+                    const char* ep1Uid = doc["uid"] | "";
+                    int ri = activePilots[s];
+                    if (ri >= 0 && ri < rosterCount && roster[ri].hasUid) {
+                        char expected[18]; uidToStr(roster[ri].uid, expected);
+                        if (strcasecmp(ep1Uid, expected) != 0)
+                            sendEp1ProvisionForSlot(s);
+                    }
+                }
+                break;
+            }
+        }
         return;
     }
     if (strcmp(type, "scan") == 0) {

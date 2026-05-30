@@ -33,6 +33,8 @@ var sdLogMode    = localStorage.getItem('sdLogMode')||'always';
 function sdLogModeInt(m){return m==='off'?2:(m==='rotate'?1:0);}
 
 var scanResults  = {};
+var ep1Nodes     = {};   // mac -> {mac, state, uid, lastSeenAt}
+var slotEp1Macs  = ['','','',''];  // EP1 MAC per slot (index = slot)
 var editingRosterId = null;
 var sdPresent = false;
 var sdFileList = [];
@@ -70,6 +72,7 @@ function switchTab(tab){
   if(tab==='calib'){
     setTimeout(()=>{
       slots.forEach(p=>{
+        if(typeof updateCalibStatus==='function')updateCalibStatus(p.id);
         var c=charts[p.id];if(!c)return;
         var newW=c.cv.offsetWidth||300;
         if(newW!==c.cv.width){c.cv.width=newW;}
