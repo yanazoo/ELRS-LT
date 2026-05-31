@@ -35,6 +35,12 @@
 // ELRS TX stays on each FHSS channel for this many consecutive packets before hopping.
 // Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 500Hz).
 #define FHSS_HOP_INTERVAL    4
+// Time the TX spends on one channel = hopInterval slots. FOLLOW dwells exactly
+// this long (slot-phase locked to the TX) so it catches all interleaved slots.
+#define FHSS_HOP_PERIOD_US   (ELRS_SLOT_US * FHSS_HOP_INTERVAL)   // 8000us @ 500Hz
+// Approx LoRa airtime of one 8-byte SF5/BW800 packet. Used to back-date a SYNC
+// packet's reception to its slot boundary when re-anchoring the hop grid phase.
+#define PKT_AIRTIME_US       1100
 
 // ---- Lock-on tuning ----
 // SCAN dwell must exceed one packet interval (500Hz = 2000us) so a parked
@@ -82,6 +88,7 @@
 #define OTA_TYPE_SYNC           0x02
 #define OTA_TYPE_TLM            0x03   // telemetry uplink (RX->TX) = drone's signal
 #define OTA_SYNC_FHSS_BYTE      1
+#define OTA_SYNC_NONCE_BYTE     2      // packet counter; (nonce % hopInterval) = slot in dwell
 #define OTA_SYNC_UID3_BYTE      4
 #define OTA_SYNC_UID4_BYTE      5
 #define OTA_SYNC_UID5_BYTE      6

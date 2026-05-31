@@ -48,6 +48,16 @@ static uint32_t s_lastTlmMs   = 0;     // millis() of the last TLM packet seen
 static int8_t   s_lastTlmRssi = RSSI_FLOOR_DBM;
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_tlmCount    = 0;     // TLM packets since last debug log
+static uint16_t s_rcCount     = 0;     // RC/MSP downlink packets since last log
+static uint16_t s_syncCount   = 0;     // SYNC packets since last log
+
+// ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
+// We hop on an absolute micros() grid (s_nextHopUs) rather than by counting
+// packets, and re-anchor both the grid phase and hopIndex whenever a SYNC
+// packet arrives (it carries fhssIndex + nonce).  This keeps the EP1 on each
+// channel for the FULL dwell so it reliably catches the interleaved telemetry
+// slots, not just the easy-to-hit downlink slots.
+static uint32_t s_nextHopUs   = 0;     // absolute deadline to hop to next channel
 
 // ---- ESP-NOW provision flag (set from network-task ISR context) ----
 // Declared here so auto-discovery can abort early when a provision arrives.
@@ -480,37 +490,38 @@ void loop() {
     }
 
     case ST_FOLLOW: {
-        // Per-channel dwell model: tune once, listen in continuous RX.
+        // Slot-phase-locked dwell.  We hop on an ABSOLUTE micros() grid
+        // (s_nextHopUs) instead of by counting packets, so the EP1 stays on each
+        // channel for the TX's full dwell and catches every interleaved slot —
+        // including the telemetry (uplink) slots, not just the downlink slots.
         //
-        // rxCount tracks TX DOWNLINK packets only (RC/MSP/SYNC).  TLM from the
-        // drone is interleaved within the same 2ms slot and must NOT advance
-        // rxCount — at TLM ratio 1:2 every slot has one TLM, so counting both
-        // would fill rxCount=4 in half a hop and cause systematic FHSS drift.
+        // A SYNC packet carries fhssIndex + nonce.  nonce % FHSShopInterval is
+        // the slot index within the current dwell, so it tells us exactly how
+        // much time is left on this channel: we re-anchor s_nextHopUs (phase)
+        // and hopIndex (sequence position) from every SYNC.  Between SYNCs the
+        // grid free-runs; crystal drift over a sync interval is negligible.
         //
-        // SYNC packets carry the TX's own fhssIndex → used to continuously
-        // correct hopIndex and prevent drift accumulation over time.
-        //
-        // RSSI for lap timing is reported ONLY for TLM (drone uplink).
+        // RSSI for lap timing is reported ONLY for TLM (the drone's uplink).
+        uint32_t nowU = micros();
+        // First entry, or grid fell badly behind (e.g. after a stall): re-seat it.
+        if (s_nextHopUs == 0 ||
+            (int32_t)(nowU - s_nextHopUs) > (int32_t)FHSS_HOP_PERIOD_US) {
+            s_nextHopUs = nowU + FHSS_HOP_PERIOD_US;
+        }
+
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
-        uint32_t dwellStart = micros();
-        uint32_t lastRxUs   = dwellStart;
-        uint8_t  rxCount    = 0;
-        const uint32_t hardCap = (uint32_t)ELRS_SLOT_US * (FHSS_HOP_INTERVAL + 2);
-        const uint32_t gapUs   = (uint32_t)ELRS_SLOT_US * 2;   // 2 missed slots = hopped
-
-        while (rxCount < FHSS_HOP_INTERVAL &&
-               (uint32_t)(micros() - dwellStart) < hardCap) {
+        bool gotAny = false;
+        while ((int32_t)(s_nextHopUs - micros()) > 0) {
             if (sxPacketReceived()) {
-                lastRxUs = micros();
+                gotAny = true;
                 lqPush(true);
                 uint8_t buf[8];
                 sxReadPayload(buf, 8);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
                 if (pktType == OTA_TYPE_TLM) {
-                    // Drone telemetry uplink — lap-timing signal.
-                    // Don't advance rxCount: TLM is interleaved within a TX slot.
+                    // Drone telemetry uplink — the lap-timing signal.
                     s_lastTlmRssi = sxReadRssi();
                     s_lastTlmMs   = millis();
                     s_tlmCount++;
@@ -518,32 +529,38 @@ void loop() {
                         espnowSendRssi(ident.uid, s_lastTlmRssi, lqPct(), s_lastTlmMs);
                         lastReport = s_lastTlmMs;
                     }
+                } else if (pktType == OTA_TYPE_SYNC) {
+                    // Re-anchor sequence position AND slot phase from the TX.
+                    s_syncCount++;
+                    hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
+                    uint8_t slot = buf[OTA_SYNC_NONCE_BYTE] % FHSS_HOP_INTERVAL;
+                    // Slot boundary ≈ now − airtime; TX hops after the remaining
+                    // (hopInterval − slot) slots of this dwell.
+                    uint32_t remain = (uint32_t)(FHSS_HOP_INTERVAL - slot) * ELRS_SLOT_US;
+                    s_nextHopUs = micros() - PKT_AIRTIME_US + remain;
                 } else {
-                    // TX downlink (RC_DATA / MSP / SYNC) — counts toward hop.
-                    rxCount++;
-                    if (pktType == OTA_TYPE_SYNC) {
-                        // SYNC carries the TX's fhssIndex: adopt it to correct
-                        // any accumulated drift.  hopIndex++ at end of dwell
-                        // will advance to the correct next channel.
-                        hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
-                    }
+                    // RC_DATA / MSP downlink — activity only (kept for LQ + debug).
+                    s_rcCount++;
                 }
-            } else if (rxCount > 0 && (uint32_t)(micros() - lastRxUs) > gapUs) {
-                break;   // had downlink packets then a gap → TX moved on
             }
             yield();
         }
 
-        if (rxCount > 0) {
+        if (gotAny) {
             missStreak = 0;
         } else {
             lqPush(false);
             if (++missStreak >= MISS_STREAK_RESYNC) {
                 state = ST_SCAN;
+                s_nextHopUs = 0;     // force grid re-seat on next lock
                 Serial.print(F("[gate_ep1] resync lq="));
                 Serial.println(lqPct());
             }
         }
+
+        // Advance to the next channel and the next grid slot.
+        s_nextHopUs += FHSS_HOP_PERIOD_US;
+        hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
 
         // Drone telemetry gone (out of range / powered off): drop the reported
         // RSSI to the floor so the lap-timing trace returns to baseline instead
@@ -555,16 +572,19 @@ void loop() {
             lastReport = now;
         }
 
-        // 1 Hz serial debug: telemetry packets/sec + last drone RSSI + link LQ.
+        // 1 Hz serial debug: per-type packet rates + last drone RSSI + link LQ.
+        // rc = TX downlink, sync = TX sync, tlm = drone telemetry (lap signal).
         if (now - s_tlmLogMs >= 1000) {
-            Serial.printf("[gate_ep1] tlm=%u/s rssi=%d lq=%u%s\n",
+            Serial.printf("[gate_ep1] rc=%u sync=%u tlm=%u/s rssi=%d lq=%u%s\n",
+                          (unsigned)s_rcCount, (unsigned)s_syncCount,
                           (unsigned)s_tlmCount, (int)s_lastTlmRssi, (unsigned)lqPct(),
-                          (s_tlmCount == 0) ? " (no drone)" : "");
+                          (s_tlmCount == 0) ? " (no telem)" : "");
+            s_rcCount   = 0;
+            s_syncCount = 0;
             s_tlmCount  = 0;
             s_tlmLogMs  = now;
         }
 
-        hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
         break;
     }
     }
