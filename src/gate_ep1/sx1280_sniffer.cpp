@@ -247,6 +247,17 @@ int8_t sxReadRssi() {
     return s_last_rssi;
 }
 
+int8_t sxReadRssiNow() {
+    // GetPacketStatus (LoRa): after the discarded status byte the response is
+    // [rssiSync, snr, ...].  dBm = -(rssiSync / 2).
+    // Previously sxPacketReceived() read ps[1] (the SNR byte) as RSSI — a bug;
+    // the correct RSSI is ps[0].  We only need the first two bytes.
+    uint8_t ps[2] = {};
+    readCmd(SX_CMD_GET_PKT_STATUS, ps, 2);
+    s_last_rssi = -(int8_t)(ps[0] / 2);
+    return s_last_rssi;
+}
+
 uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen) {
     // GetRxBufferStatus returns: [status(ignored), payloadLen, rxStartBufPtr]
     uint8_t sts[2] = {};
@@ -273,14 +284,16 @@ bool sxPacketReceived() {
 
     if (!(irq & IRQ_RX_DONE)) return false;
 
-    // Read packet RSSI from GetPacketStatus for accuracy.
-    // LoRa response layout (6 bytes): [RFU, rssiSync, snrPkt, RFU, RFU, RFU]
-    // rssiSync → dBm = -(raw / 2)
-    uint8_t ps[6] = {};
-    readCmd(SX_CMD_GET_PKT_STATUS, ps, 6);
-    s_last_rssi = -(int8_t)(ps[1] / 2);
-
-    // Clear all IRQ flags.
+    // Clear all IRQ flags so the next slot's RX_DONE is detectable.
+    //
+    // RSSI is intentionally NOT read here.  At 500Hz a downlink slot and the
+    // interleaved telemetry (uplink) slot are only 2 ms apart.  Reading
+    // GetPacketStatus (a 6-byte SPI transfer) for EVERY packet — the vast
+    // majority of which are downlink we never report — stretches per-packet
+    // handling toward a full slot and makes the FOLLOW capture loop phase-lock
+    // onto one slot direction (catching only downlink OR only telemetry, the
+    // observed all-or-nothing tlm=0 vs tlm=232/s behaviour).  RSSI is read
+    // lazily via sxReadRssiNow() only for the telemetry packets we report.
     uint8_t clr[2] = { 0xFF, 0xFF };
     writeCmd(SX_CMD_CLR_IRQ_STATUS, clr, 2);
 

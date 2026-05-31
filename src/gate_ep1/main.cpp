@@ -521,14 +521,14 @@ void loop() {
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
                 if (pktType == OTA_TYPE_TLM) {
-                    // Drone telemetry uplink — the lap-timing signal.
-                    s_lastTlmRssi = sxReadRssi();
+                    // Drone telemetry uplink — the lap-timing signal.  Just
+                    // record it here (RSSI read straight from the radio, only
+                    // for telemetry — see sxPacketReceived()).  The ESP-NOW
+                    // report is sent AFTER the dwell so no WiFi TX runs inside
+                    // the slot-catching loop.
+                    s_lastTlmRssi = sxReadRssiNow();
                     s_lastTlmMs   = millis();
                     s_tlmCount++;
-                    if (s_lastTlmMs - lastReport >= RSSI_REPORT_MS) {
-                        espnowSendRssi(ident.uid, s_lastTlmRssi, lqPct(), s_lastTlmMs);
-                        lastReport = s_lastTlmMs;
-                    }
                 } else if (pktType == OTA_TYPE_SYNC) {
                     // Re-anchor sequence position AND slot phase from the TX.
                     s_syncCount++;
@@ -543,7 +543,12 @@ void loop() {
                     s_rcCount++;
                 }
             }
-            yield();
+            // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
+            // yield() services the WiFi/ESP-NOW stack and can stall for ~1-2 ms
+            // — about one 500Hz slot — which made this loop skip every other
+            // slot and lock onto a single direction (downlink OR telemetry).
+            // The dwell is ≤8 ms and we yield between dwells (loop() returns),
+            // which feeds the soft WDT and lets ESP-NOW drain with ~8 ms latency.
         }
 
         if (gotAny) {
@@ -562,13 +567,16 @@ void loop() {
         s_nextHopUs += FHSS_HOP_PERIOD_US;
         hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
 
-        // Drone telemetry gone (out of range / powered off): drop the reported
-        // RSSI to the floor so the lap-timing trace returns to baseline instead
-        // of holding the last peak.  Rate-limited like the live reports.
+        // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
+        // so no WiFi TX competes with slot catching.  If telemetry was heard
+        // recently, report the drone's live RSSI; once it has been silent for
+        // TLM_SILENCE_MS (out of range / powered off) report the floor so the
+        // lap-timing trace returns to baseline instead of holding the last peak.
         uint32_t now = millis();
-        if ((now - s_lastTlmMs) > TLM_SILENCE_MS &&
-            (now - lastReport)  >= RSSI_REPORT_MS) {
-            espnowSendRssi(ident.uid, RSSI_FLOOR_DBM, lqPct(), now);
+        if ((now - lastReport) >= RSSI_REPORT_MS) {
+            int8_t reportRssi = ((now - s_lastTlmMs) <= TLM_SILENCE_MS)
+                                ? s_lastTlmRssi : (int8_t)RSSI_FLOOR_DBM;
+            espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
             lastReport = now;
         }
 
