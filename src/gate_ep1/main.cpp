@@ -480,15 +480,17 @@ void loop() {
     }
 
     case ST_FOLLOW: {
-        // Per-channel dwell model (robust at 500Hz where a slot is only 2ms and
-        // precise per-packet slot prediction is too brittle): tune once to the
-        // predicted channel, then listen in continuous RX. Count packets until we
-        // have a full hop's worth, or a gap shows the TX has hopped on, then step
-        // hopIndex to the next channel in the FHSS sequence.
+        // Per-channel dwell model: tune once, listen in continuous RX.
         //
-        // RSSI for lap timing is taken ONLY from telemetry packets (OTA type
-        // 0b11 = the drone's uplink).  Downlink packets (RC/MSP/SYNC) come from
-        // the stationary handset and are used only to maintain FHSS lock + LQ.
+        // rxCount tracks TX DOWNLINK packets only (RC/MSP/SYNC).  TLM from the
+        // drone is interleaved within the same 2ms slot and must NOT advance
+        // rxCount — at TLM ratio 1:2 every slot has one TLM, so counting both
+        // would fill rxCount=4 in half a hop and cause systematic FHSS drift.
+        //
+        // SYNC packets carry the TX's own fhssIndex → used to continuously
+        // correct hopIndex and prevent drift accumulation over time.
+        //
+        // RSSI for lap timing is reported ONLY for TLM (drone uplink).
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
         uint32_t dwellStart = micros();
@@ -500,14 +502,15 @@ void loop() {
         while (rxCount < FHSS_HOP_INTERVAL &&
                (uint32_t)(micros() - dwellStart) < hardCap) {
             if (sxPacketReceived()) {
-                rxCount++;
                 lastRxUs = micros();
                 lqPush(true);
-                // Read the packet so we can tell uplink (drone) from downlink (TX).
                 uint8_t buf[8];
                 sxReadPayload(buf, 8);
-                if ((buf[0] & OTA_TYPE_MASK) == OTA_TYPE_TLM) {
-                    // Telemetry from the drone — this is the lap-timing signal.
+                uint8_t pktType = buf[0] & OTA_TYPE_MASK;
+
+                if (pktType == OTA_TYPE_TLM) {
+                    // Drone telemetry uplink — lap-timing signal.
+                    // Don't advance rxCount: TLM is interleaved within a TX slot.
                     s_lastTlmRssi = sxReadRssi();
                     s_lastTlmMs   = millis();
                     s_tlmCount++;
@@ -515,9 +518,18 @@ void loop() {
                         espnowSendRssi(ident.uid, s_lastTlmRssi, lqPct(), s_lastTlmMs);
                         lastReport = s_lastTlmMs;
                     }
+                } else {
+                    // TX downlink (RC_DATA / MSP / SYNC) — counts toward hop.
+                    rxCount++;
+                    if (pktType == OTA_TYPE_SYNC) {
+                        // SYNC carries the TX's fhssIndex: adopt it to correct
+                        // any accumulated drift.  hopIndex++ at end of dwell
+                        // will advance to the correct next channel.
+                        hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
+                    }
                 }
             } else if (rxCount > 0 && (uint32_t)(micros() - lastRxUs) > gapUs) {
-                break;   // had packets then a gap → TX moved to the next channel
+                break;   // had downlink packets then a gap → TX moved on
             }
             yield();
         }
