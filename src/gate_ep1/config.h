@@ -45,6 +45,21 @@
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
+// ---- Telemetry-only RSSI (lap timing) ----
+// The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
+// link the drone (RX) only transmits during telemetry slots (OTA type 0b11);
+// everything else (RC_DATA/MSP/SYNC) is downlink from the stationary TX and is
+// useless for position.  We therefore report RSSI only from TLM packets.
+//   - The TX downlink is still used to keep FHSS lock (it is always present).
+//   - When no telemetry has been heard for TLM_SILENCE_MS, we emit RSSI_FLOOR_DBM
+//     so the trace falls back to baseline instead of holding the last peak
+//     (required for the exit threshold to fire after a gate pass).
+// NOTE: telemetry cadence = tlmRatio / packetRate.  For crisp lap timing set a
+// high telemetry ratio on the TX (1:2…1:8 @ 500Hz = 4…16 ms between samples).
+// TLM_SILENCE_MS (300) is > the 1:128 interval (256 ms) so it never false-floors.
+#define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
+#define TLM_SILENCE_MS       300    // no TLM for this long -> report floor
+
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
 // Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
@@ -65,6 +80,7 @@
 //   byte[7]  crcLow
 #define OTA_TYPE_MASK           0x03
 #define OTA_TYPE_SYNC           0x02
+#define OTA_TYPE_TLM            0x03   // telemetry uplink (RX->TX) = drone's signal
 #define OTA_SYNC_FHSS_BYTE      1
 #define OTA_SYNC_UID3_BYTE      4
 #define OTA_SYNC_UID4_BYTE      5

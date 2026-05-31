@@ -1,13 +1,17 @@
 // main.cpp - Gate EP1 sniffer entry point.
 // State machine: PROVISION -> SCAN -> FOLLOW, reporting RSSI over ESP-NOW.
 //
+// Lap-timing RSSI is measured ONLY from the drone's telemetry uplink (OTA type
+// 0b11).  The TX downlink (RC/MSP/SYNC) is from the stationary handset and is
+// used only to keep FHSS lock — never reported as a position signal.
+//
 // Provisioning (pick one, in priority order):
 //   A. Compile-time: define BRINGUP_UID in secrets.h (for solo bring-up).
 //   B. Runtime ESP-NOW: Gate Node unicasts GateProvisionPacket_t on pilot assign.
 //   C. Runtime UART: send "UID AABBCCDDEEFF\n" over the serial monitor.
 //   D. Auto-discovery: EP1 parks on ELRS sync channel, reads OTA SYNC packets
-//      to extract UID[4:5]+fhssIndex, then brute-forces UID[2:3] by scanning
-//      all 80 channels and matching observed channel activity to candidates.
+//      to extract fhssIndex+UID[3:4]+UID[5]hi, then brute-forces the remaining
+//      UID[2]+UID[5]lo by matching observed channel activity to candidates.
 //
 // This EP1 sends a GateEP1BeaconPacket_t every BEACON_INTERVAL_MS so the
 // Gate Node can discover its MAC and relay it to the Web UI for assignment.
@@ -37,6 +41,13 @@ static uint16_t hopIndex   = 0;
 static uint16_t missStreak = 0;
 static uint32_t lastReport = 0;
 static SnifferIdentity_t ident = { {0}, false };
+
+// ---- Telemetry-only RSSI tracking (lap timing) ----
+// Lap position comes from the drone's telemetry uplink, never the TX downlink.
+static uint32_t s_lastTlmMs   = 0;     // millis() of the last TLM packet seen
+static int8_t   s_lastTlmRssi = RSSI_FLOOR_DBM;
+static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
+static uint16_t s_tlmCount    = 0;     // TLM packets since last debug log
 
 // ---- ESP-NOW provision flag (set from network-task ISR context) ----
 // Declared here so auto-discovery can abort early when a provision arrives.
@@ -474,6 +485,10 @@ void loop() {
         // predicted channel, then listen in continuous RX. Count packets until we
         // have a full hop's worth, or a gap shows the TX has hopped on, then step
         // hopIndex to the next channel in the FHSS sequence.
+        //
+        // RSSI for lap timing is taken ONLY from telemetry packets (OTA type
+        // 0b11 = the drone's uplink).  Downlink packets (RC/MSP/SYNC) come from
+        // the stationary handset and are used only to maintain FHSS lock + LQ.
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
         uint32_t dwellStart = micros();
@@ -488,11 +503,18 @@ void loop() {
                 rxCount++;
                 lastRxUs = micros();
                 lqPush(true);
-                int8_t   rssi = sxReadRssi();
-                uint32_t now  = millis();
-                if (now - lastReport >= RSSI_REPORT_MS) {
-                    espnowSendRssi(ident.uid, rssi, lqPct(), now);
-                    lastReport = now;
+                // Read the packet so we can tell uplink (drone) from downlink (TX).
+                uint8_t buf[8];
+                sxReadPayload(buf, 8);
+                if ((buf[0] & OTA_TYPE_MASK) == OTA_TYPE_TLM) {
+                    // Telemetry from the drone — this is the lap-timing signal.
+                    s_lastTlmRssi = sxReadRssi();
+                    s_lastTlmMs   = millis();
+                    s_tlmCount++;
+                    if (s_lastTlmMs - lastReport >= RSSI_REPORT_MS) {
+                        espnowSendRssi(ident.uid, s_lastTlmRssi, lqPct(), s_lastTlmMs);
+                        lastReport = s_lastTlmMs;
+                    }
                 }
             } else if (rxCount > 0 && (uint32_t)(micros() - lastRxUs) > gapUs) {
                 break;   // had packets then a gap → TX moved to the next channel
@@ -510,6 +532,26 @@ void loop() {
                 Serial.println(lqPct());
             }
         }
+
+        // Drone telemetry gone (out of range / powered off): drop the reported
+        // RSSI to the floor so the lap-timing trace returns to baseline instead
+        // of holding the last peak.  Rate-limited like the live reports.
+        uint32_t now = millis();
+        if ((now - s_lastTlmMs) > TLM_SILENCE_MS &&
+            (now - lastReport)  >= RSSI_REPORT_MS) {
+            espnowSendRssi(ident.uid, RSSI_FLOOR_DBM, lqPct(), now);
+            lastReport = now;
+        }
+
+        // 1 Hz serial debug: telemetry packets/sec + last drone RSSI + link LQ.
+        if (now - s_tlmLogMs >= 1000) {
+            Serial.printf("[gate_ep1] tlm=%u/s rssi=%d lq=%u%s\n",
+                          (unsigned)s_tlmCount, (int)s_lastTlmRssi, (unsigned)lqPct(),
+                          (s_tlmCount == 0) ? " (no drone)" : "");
+            s_tlmCount  = 0;
+            s_tlmLogMs  = now;
+        }
+
         hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
         break;
     }
