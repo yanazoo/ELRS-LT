@@ -18,8 +18,13 @@
 // Pilot detection
 #define MAX_PILOTS         4
 #define EMA_ALPHA          0.3f
-#define DEFAULT_ENTRY_THR  (-80)
-#define DEFAULT_EXIT_THR   (-90)
+// Default thresholds assume max-RSSI-per-interval reporting from the EP1/EP2
+// sniffer firmware.  TX downlink background is typically -65 to -75 dBm (varies
+// with TX-to-gate distance).  A drone passing at <2m spikes to -35 to -45 dBm.
+// Set defaults well above the background so a freshly registered pilot does not
+// immediately enter a permanent crossing state.  Fine-tune per gate via Calib tab.
+#define DEFAULT_ENTRY_THR  (-55)
+#define DEFAULT_EXIT_THR   (-62)
 #define COOLDOWN_MS        3000UL
 #define RSSI_INTERVAL_MS   50UL
 #define SIGNAL_LOST_MS      200UL
