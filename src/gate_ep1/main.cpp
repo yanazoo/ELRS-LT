@@ -51,6 +51,17 @@ static uint16_t s_tlmCount    = 0;     // TLM packets since last debug log
 static uint16_t s_rcCount     = 0;     // RC/MSP downlink packets since last log
 static uint16_t s_syncCount   = 0;     // SYNC packets since last log
 
+// ---- Raw diagnostics (independent of classification) ----
+// Histogram of the raw 2-bit OTA type of EVERY received packet, plus the most
+// packets caught in a single dwell.  These answer, without guessing:
+//   t[2] > 0      -> we ARE catching SYNC (nonce bootstrap is possible)
+//   maxPerDwell   -> 1 means single-Rx (radio leaves RX after 1 pkt); 3-4 means
+//                    continuous RX is catching the whole dwell as intended
+//   t[1] (DATA)   -> MSP/telemetry DATA packets present on air
+static uint16_t s_rawType[4]   = {0, 0, 0, 0};
+static uint8_t  s_maxPerDwell  = 0;
+static int8_t   s_rawRssiMax   = RSSI_FLOOR_DBM;  // strongest packet seen this sec
+
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
 static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
 static uint32_t s_dwellStartUs = 0;    // micros() recorded just before sxSetFrequencyHz
@@ -524,14 +535,23 @@ void loop() {
         s_dwellStartUs = micros();
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
-        bool gotAny = false;
+        bool    gotAny    = false;
+        uint8_t dwellPkts = 0;     // packets caught this dwell (continuous-Rx check)
         while ((int32_t)(s_nextHopUs - micros()) > 0) {
             if (sxPacketReceived()) {
                 gotAny = true;
+                dwellPkts++;
                 lqPush(true);
                 uint8_t buf[8];
                 sxReadPayload(buf, 8);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
+
+                // Diagnostics: read RSSI once per packet (cheap — the per-packet
+                // stall that caused slot phase-lock was yield(), not this SPI read)
+                // and record the raw type + strongest signal seen.
+                int8_t rssiNow = sxReadRssiNow();
+                s_rawType[pktType]++;
+                if (rssiNow > s_rawRssiMax) s_rawRssiMax = rssiNow;
 
                 if (pktType == OTA_TYPE_SYNC) {
                     // Re-anchor sequence position, slot phase, AND nonce reference.
@@ -559,7 +579,7 @@ void loop() {
                         isTlm = ((pktNonce % s_tlmDenom) == 0);
                     }
                     if (isTlm) {
-                        s_lastTlmRssi = sxReadRssiNow();
+                        s_lastTlmRssi = rssiNow;
                         s_lastTlmMs   = millis();
                         s_tlmCount++;
                     } else {
@@ -574,6 +594,8 @@ void loop() {
             // The dwell is ≤8 ms and we yield between dwells (loop() returns),
             // which feeds the soft WDT and lets ESP-NOW drain with ~8 ms latency.
         }
+
+        if (dwellPkts > s_maxPerDwell) s_maxPerDwell = dwellPkts;
 
         if (gotAny) {
             missStreak = 0;
@@ -606,17 +628,28 @@ void loop() {
             lastReport = now;
         }
 
-        // 1 Hz serial debug: per-type packet rates + last drone RSSI + link LQ.
-        // rc = TX downlink, sync = TX sync, tlm = drone telemetry (lap signal).
+        // 1 Hz serial debug.  Top line = classification result; raw line = raw
+        // diagnostics that don't depend on any classification logic:
+        //   raw[0..3] = histogram of the 2-bit OTA type of every packet
+        //               (t0=RCDATA/LINKSTATS  t1=DATA/MSP  t2=SYNC  t3=unused)
+        //   max/dw    = most packets in one dwell (1=single-Rx bug, 3-4=continuous OK)
+        //   rmax      = strongest packet RSSI this second (bring drone close -> spikes)
         if (now - s_tlmLogMs >= 1000) {
             Serial.printf("[gate_ep1] rc=%u sync=%u tlm=%u/s rssi=%d lq=%u denom=%u%s\n",
                           (unsigned)s_rcCount, (unsigned)s_syncCount,
                           (unsigned)s_tlmCount, (int)s_lastTlmRssi, (unsigned)lqPct(),
                           (unsigned)s_tlmDenom,
                           (!s_nonceValid) ? " (no sync)" : (s_tlmCount == 0) ? " (no telem)" : "");
+            Serial.printf("[gate_ep1]   raw t0=%u t1=%u t2=%u t3=%u max/dw=%u rmax=%d\n",
+                          (unsigned)s_rawType[0], (unsigned)s_rawType[1],
+                          (unsigned)s_rawType[2], (unsigned)s_rawType[3],
+                          (unsigned)s_maxPerDwell, (int)s_rawRssiMax);
             s_rcCount   = 0;
             s_syncCount = 0;
             s_tlmCount  = 0;
+            s_rawType[0] = s_rawType[1] = s_rawType[2] = s_rawType[3] = 0;
+            s_maxPerDwell = 0;
+            s_rawRssiMax  = RSSI_FLOOR_DBM;
             s_tlmLogMs  = now;
         }
 

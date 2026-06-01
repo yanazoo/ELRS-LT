@@ -63,16 +63,20 @@
 // regval = (uint32_t)(freqHz / FREQ_STEP)
 #define FREQ_STEP  (52000000.0 / 262144.0)
 
-// ---- SetRx timeout: 0x0000 = Rx Continuous (never returns to STANDBY on packet reception).
-// This is essential for passive sniffing: within one 8 ms dwell there are up to 4 LoRa
-// slots (2 TX downlink + 2 drone TLM at ratio 1:2).  The SX1280 single-Rx mode
-// (non-zero period count) returns to STANDBY after the first received packet, so
-// every slot after the first is missed — giving rc≈125/s and tlm=0 forever.
-// Continuous mode keeps the radio in RX until we explicitly call SetStandby (which
-// sxSetFrequencyHz already does at the start of every channel hop).
+// ---- SetRx timeout (SX1280 datasheet Table 11-22, opcode 0x82) ----
+//   periodBaseCount = 0x0000  -> Rx SINGLE  (returns to STDBY_RC after 1 packet)
+//   periodBaseCount = 0xFFFF  -> Rx CONTINUOUS (stays in RX until SetStandby)
+// Passive sniffing MUST use continuous: within one 8 ms dwell there are up to 4
+// LoRa slots (2 TX downlink + 2 drone TLM at ratio 1:2).  In single mode the
+// radio goes to STANDBY after the first packet and every later slot in the dwell
+// is missed — that halves the catch rate (rc≈125/s = exactly 1 packet/dwell) and
+// makes the telemetry slots invisible.  ELRS's own RX uses single mode only
+// because it re-arms RX every slot from a hardware timer; we don't, so we need
+// continuous.  sxSetFrequencyHz() calls SetStandby at every hop, which is what
+// takes us out of continuous RX cleanly.
 #define RX_TIMEOUT_TICK            0x00
-#define RX_TIMEOUT_HI              0x00
-#define RX_TIMEOUT_LO              0x00
+#define RX_TIMEOUT_HI              0xFF   // periodBaseCount = 0xFFFF -> continuous
+#define RX_TIMEOUT_LO              0xFF
 
 // ---- Module state ----
 static int8_t s_last_rssi = -127;
