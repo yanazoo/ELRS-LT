@@ -42,25 +42,29 @@ static uint16_t missStreak = 0;
 static uint32_t lastReport = 0;
 static SnifferIdentity_t ident = { {0}, false };
 
-// ---- Telemetry-only RSSI tracking (lap timing) ----
-// Lap position comes from the drone's telemetry uplink, never the TX downlink.
-static uint32_t s_lastTlmMs   = 0;     // millis() of the last TLM packet seen
-static int8_t   s_lastTlmRssi = RSSI_FLOOR_DBM;
+// ---- RSSI tracking for ESP-NOW reporting ----
+// In ELRS 3.x with an established link, the TX does NOT send SYNC packets
+// during armed flight (NextPacketIsSyncPacket() returns false when linked
+// with good LQ).  Without SYNC we cannot bootstrap the nonce/denom approach
+// to separate drone uplink from TX downlink.
+//
+// Instead we track the MAXIMUM RSSI of every received packet within each
+// reporting interval.  This works because:
+//   - TX downlink RSSI is roughly constant (TX is stationary at pilot box)
+//   - Drone uplink RSSI spikes sharply when drone passes the gate
+//   - max_RSSI per 50ms tracks drone proximity; gate_node threshold calibration
+//     (EnterAt/ExitAt) separates the drone-near spike from the TX background
+// When no packets are received (scan/resync) the accumulator stays at floor,
+// so gate_node sees floor during lock loss — same semantics as before.
+static int8_t   s_reportRssi  = RSSI_FLOOR_DBM;  // max RSSI since last report
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
-static uint16_t s_tlmCount    = 0;     // TLM packets since last debug log
-static uint16_t s_rcCount     = 0;     // RC/MSP downlink packets since last log
+static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_syncCount   = 0;     // SYNC packets since last log
 
 // ---- Raw diagnostics (independent of classification) ----
-// Histogram of the raw 2-bit OTA type of EVERY received packet, plus the most
-// packets caught in a single dwell.  These answer, without guessing:
-//   t[2] > 0      -> we ARE catching SYNC (nonce bootstrap is possible)
-//   maxPerDwell   -> 1 means single-Rx (radio leaves RX after 1 pkt); 3-4 means
-//                    continuous RX is catching the whole dwell as intended
-//   t[1] (DATA)   -> MSP/telemetry DATA packets present on air
 static uint16_t s_rawType[4]   = {0, 0, 0, 0};
 static uint8_t  s_maxPerDwell  = 0;
-static int8_t   s_rawRssiMax   = RSSI_FLOOR_DBM;  // strongest packet seen this sec
+static int8_t   s_rawRssiMax   = RSSI_FLOOR_DBM;
 
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
 static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
@@ -546,15 +550,21 @@ void loop() {
                 sxReadPayload(buf, 8);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
-                // Diagnostics: read RSSI once per packet (cheap — the per-packet
-                // stall that caused slot phase-lock was yield(), not this SPI read)
-                // and record the raw type + strongest signal seen.
+                // Read RSSI for every packet and accumulate the max for this
+                // reporting interval.  In ELRS 3.x both downlink (RCDATA) and
+                // uplink (LINKSTATS) use OTA type 0b00, so we cannot separate
+                // them by type when SYNC packets are absent (which they are in
+                // stable armed flight).  The max-per-interval approach still
+                // gives a reliable lap-timing signal because the drone uplink
+                // RSSI dominates when the drone is near the gate.
                 int8_t rssiNow = sxReadRssiNow();
                 s_rawType[pktType]++;
-                if (rssiNow > s_rawRssiMax) s_rawRssiMax = rssiNow;
+                if (rssiNow > s_rawRssiMax)  s_rawRssiMax  = rssiNow;
+                if (rssiNow > s_reportRssi)  s_reportRssi  = rssiNow;
+                s_pktCount++;
 
                 if (pktType == OTA_TYPE_SYNC) {
-                    // Re-anchor sequence position, slot phase, AND nonce reference.
+                    // SYNC present (rare in stable link): re-anchor hop grid.
                     s_syncCount++;
                     hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
                     uint8_t nonce = buf[OTA_SYNC_NONCE_BYTE];
@@ -565,26 +575,6 @@ void loop() {
                     s_nonceValid = (s_tlmDenom >= 2);
                     uint8_t slotsLeft = FHSS_HOP_INTERVAL - (nonce % FHSS_HOP_INTERVAL);
                     s_nextHopUs = micros() - PKT_AIRTIME_US + (uint32_t)slotsLeft * ELRS_SLOT_US;
-                } else {
-                    // ELRS 3.x: RC_DATA (DL) and LINKSTATS (TLM) both use type 0b00;
-                    // cannot be distinguished by type field alone.  Use nonce-based
-                    // slot detection: OtaNonce % tlmDenom == 0 → TLM slot (drone TX).
-                    // ELRS 2.x fallback: type 0b11 still means telemetry explicitly.
-                    bool isTlm = (pktType == OTA_TYPE_TLM);
-                    if (!isTlm && pktType == 0x00 && s_nonceValid) {
-                        uint32_t elapsed    = micros() - s_dwellStartUs;
-                        uint8_t  slotInDwell = (uint8_t)(elapsed / ELRS_SLOT_US);
-                        if (slotInDwell >= FHSS_HOP_INTERVAL) slotInDwell = FHSS_HOP_INTERVAL - 1;
-                        uint8_t pktNonce = s_nonceBase + slotInDwell;
-                        isTlm = ((pktNonce % s_tlmDenom) == 0);
-                    }
-                    if (isTlm) {
-                        s_lastTlmRssi = rssiNow;
-                        s_lastTlmMs   = millis();
-                        s_tlmCount++;
-                    } else {
-                        s_rcCount++;
-                    }
                 }
             }
             // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
@@ -616,41 +606,38 @@ void loop() {
         if (s_nonceValid) s_nonceBase += FHSS_HOP_INTERVAL;
 
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
-        // so no WiFi TX competes with slot catching.  If telemetry was heard
-        // recently, report the drone's live RSSI; once it has been silent for
-        // TLM_SILENCE_MS (out of range / powered off) report the floor so the
-        // lap-timing trace returns to baseline instead of holding the last peak.
+        // so no WiFi TX competes with slot catching.
         uint32_t now = millis();
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            int8_t reportRssi = ((now - s_lastTlmMs) <= TLM_SILENCE_MS)
-                                ? s_lastTlmRssi : (int8_t)RSSI_FLOOR_DBM;
-            espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
+            // s_reportRssi = max RSSI of all packets received since last report.
+            // Resets to floor so gate_node sees floor when no packets arrive
+            // (scan/resync state).  No silence-timeout needed: TX downlink keeps
+            // s_reportRssi at the DL background level when drone is off/far, and
+            // the gate_node EnterAt threshold separates background from gate-pass.
+            espnowSendRssi(ident.uid, s_reportRssi, lqPct(), now);
+            s_reportRssi = (int8_t)RSSI_FLOOR_DBM;
             lastReport = now;
         }
 
-        // 1 Hz serial debug.  Top line = classification result; raw line = raw
-        // diagnostics that don't depend on any classification logic:
-        //   raw[0..3] = histogram of the 2-bit OTA type of every packet
-        //               (t0=RCDATA/LINKSTATS  t1=DATA/MSP  t2=SYNC  t3=unused)
-        //   max/dw    = most packets in one dwell (1=single-Rx bug, 3-4=continuous OK)
-        //   rmax      = strongest packet RSSI this second (bring drone close -> spikes)
+        // 1 Hz serial debug.
+        //   pkts  = total packets/s (TX downlink + drone uplink, both type 0b00)
+        //   sync  = TX SYNC packets (rare in stable linked flight)
+        //   rmax  = strongest packet this second — spikes when drone is close
         if (now - s_tlmLogMs >= 1000) {
-            Serial.printf("[gate_ep1] rc=%u sync=%u tlm=%u/s rssi=%d lq=%u denom=%u%s\n",
-                          (unsigned)s_rcCount, (unsigned)s_syncCount,
-                          (unsigned)s_tlmCount, (int)s_lastTlmRssi, (unsigned)lqPct(),
-                          (unsigned)s_tlmDenom,
-                          (!s_nonceValid) ? " (no sync)" : (s_tlmCount == 0) ? " (no telem)" : "");
+            Serial.printf("[gate_ep1] pkts=%u sync=%u/s rmax=%d lq=%u%s\n",
+                          (unsigned)s_pktCount, (unsigned)s_syncCount,
+                          (int)s_rawRssiMax, (unsigned)lqPct(),
+                          s_nonceValid ? " (sync-lock)" : "");
             Serial.printf("[gate_ep1]   raw t0=%u t1=%u t2=%u t3=%u max/dw=%u rmax=%d\n",
                           (unsigned)s_rawType[0], (unsigned)s_rawType[1],
                           (unsigned)s_rawType[2], (unsigned)s_rawType[3],
                           (unsigned)s_maxPerDwell, (int)s_rawRssiMax);
-            s_rcCount   = 0;
-            s_syncCount = 0;
-            s_tlmCount  = 0;
+            s_pktCount   = 0;
+            s_syncCount  = 0;
             s_rawType[0] = s_rawType[1] = s_rawType[2] = s_rawType[3] = 0;
             s_maxPerDwell = 0;
             s_rawRssiMax  = RSSI_FLOOR_DBM;
-            s_tlmLogMs  = now;
+            s_tlmLogMs   = now;
         }
 
         break;
