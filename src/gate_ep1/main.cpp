@@ -52,12 +52,24 @@ static uint16_t s_rcCount     = 0;     // RC/MSP downlink packets since last log
 static uint16_t s_syncCount   = 0;     // SYNC packets since last log
 
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
-// We hop on an absolute micros() grid (s_nextHopUs) rather than by counting
-// packets, and re-anchor both the grid phase and hopIndex whenever a SYNC
-// packet arrives (it carries fhssIndex + nonce).  This keeps the EP1 on each
-// channel for the FULL dwell so it reliably catches the interleaved telemetry
-// slots, not just the easy-to-hit downlink slots.
-static uint32_t s_nextHopUs   = 0;     // absolute deadline to hop to next channel
+static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
+static uint32_t s_dwellStartUs = 0;    // micros() recorded just before sxSetFrequencyHz
+
+// ---- Nonce-based TLM slot detection ----
+// In ELRS 3.x, downlink (RC_DATA) and uplink (LINKSTATS/TLM) both use OTA
+// packet type 0b00 — they cannot be distinguished by the type field alone.
+// The TX only transmits in downlink slots; the drone only transmits in TLM
+// slots.  Which slots are TLM is determined by:
+//   OtaNonce % tlmDenom == 0   (verified from ELRS rx_main.cpp)
+// We learn OtaNonce and tlmDenom from the SYNC packet and then track nonce
+// forward (+=hopInterval per dwell).  Before the first SYNC, RSSI stays at
+// floor (no false laps from TX downlink).
+static bool    s_nonceValid = false;  // true once a SYNC has provided a reference
+static uint8_t s_nonceBase  = 0;      // OtaNonce at slot-0 of the current dwell
+static uint8_t s_tlmDenom   = 0;      // TLM denominator (2/4/8/.../128, 0=off)
+// Denominator lookup: SYNC byte[3] bits[3:1] index → denominator
+// 0=off 1=1:128 2=1:64 3=1:32 4=1:16 5=1:8 6=1:4 7=1:2
+static const uint8_t TLM_DENOM_LUT[8] = { 0, 128, 64, 32, 16, 8, 4, 2 };
 
 // ---- ESP-NOW provision flag (set from network-task ISR context) ----
 // Declared here so auto-discovery can abort early when a provision arrives.
@@ -509,6 +521,7 @@ void loop() {
             s_nextHopUs = nowU + FHSS_HOP_PERIOD_US;
         }
 
+        s_dwellStartUs = micros();
         sxSetFrequencyHz(fhssFreqHz(fhssChannelAt(hopIndex)));
 
         bool gotAny = false;
@@ -520,27 +533,38 @@ void loop() {
                 sxReadPayload(buf, 8);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
-                if (pktType == OTA_TYPE_TLM) {
-                    // Drone telemetry uplink — the lap-timing signal.  Just
-                    // record it here (RSSI read straight from the radio, only
-                    // for telemetry — see sxPacketReceived()).  The ESP-NOW
-                    // report is sent AFTER the dwell so no WiFi TX runs inside
-                    // the slot-catching loop.
-                    s_lastTlmRssi = sxReadRssiNow();
-                    s_lastTlmMs   = millis();
-                    s_tlmCount++;
-                } else if (pktType == OTA_TYPE_SYNC) {
-                    // Re-anchor sequence position AND slot phase from the TX.
+                if (pktType == OTA_TYPE_SYNC) {
+                    // Re-anchor sequence position, slot phase, AND nonce reference.
                     s_syncCount++;
                     hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
-                    uint8_t slot = buf[OTA_SYNC_NONCE_BYTE] % FHSS_HOP_INTERVAL;
-                    // Slot boundary ≈ now − airtime; TX hops after the remaining
-                    // (hopInterval − slot) slots of this dwell.
-                    uint32_t remain = (uint32_t)(FHSS_HOP_INTERVAL - slot) * ELRS_SLOT_US;
-                    s_nextHopUs = micros() - PKT_AIRTIME_US + remain;
+                    uint8_t nonce = buf[OTA_SYNC_NONCE_BYTE];
+                    s_nonceBase = nonce - (nonce % FHSS_HOP_INTERVAL);
+                    uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
+                                     & OTA_SYNC_TLMRATIO_MASK;
+                    s_tlmDenom   = TLM_DENOM_LUT[tlmIdx];
+                    s_nonceValid = (s_tlmDenom >= 2);
+                    uint8_t slotsLeft = FHSS_HOP_INTERVAL - (nonce % FHSS_HOP_INTERVAL);
+                    s_nextHopUs = micros() - PKT_AIRTIME_US + (uint32_t)slotsLeft * ELRS_SLOT_US;
                 } else {
-                    // RC_DATA / MSP downlink — activity only (kept for LQ + debug).
-                    s_rcCount++;
+                    // ELRS 3.x: RC_DATA (DL) and LINKSTATS (TLM) both use type 0b00;
+                    // cannot be distinguished by type field alone.  Use nonce-based
+                    // slot detection: OtaNonce % tlmDenom == 0 → TLM slot (drone TX).
+                    // ELRS 2.x fallback: type 0b11 still means telemetry explicitly.
+                    bool isTlm = (pktType == OTA_TYPE_TLM);
+                    if (!isTlm && pktType == 0x00 && s_nonceValid) {
+                        uint32_t elapsed    = micros() - s_dwellStartUs;
+                        uint8_t  slotInDwell = (uint8_t)(elapsed / ELRS_SLOT_US);
+                        if (slotInDwell >= FHSS_HOP_INTERVAL) slotInDwell = FHSS_HOP_INTERVAL - 1;
+                        uint8_t pktNonce = s_nonceBase + slotInDwell;
+                        isTlm = ((pktNonce % s_tlmDenom) == 0);
+                    }
+                    if (isTlm) {
+                        s_lastTlmRssi = sxReadRssiNow();
+                        s_lastTlmMs   = millis();
+                        s_tlmCount++;
+                    } else {
+                        s_rcCount++;
+                    }
                 }
             }
             // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
@@ -557,7 +581,8 @@ void loop() {
             lqPush(false);
             if (++missStreak >= MISS_STREAK_RESYNC) {
                 state = ST_SCAN;
-                s_nextHopUs = 0;     // force grid re-seat on next lock
+                s_nextHopUs  = 0;    // force grid re-seat on next lock
+                s_nonceValid = false;
                 Serial.print(F("[gate_ep1] resync lq="));
                 Serial.println(lqPct());
             }
@@ -566,6 +591,7 @@ void loop() {
         // Advance to the next channel and the next grid slot.
         s_nextHopUs += FHSS_HOP_PERIOD_US;
         hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
+        if (s_nonceValid) s_nonceBase += FHSS_HOP_INTERVAL;
 
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.  If telemetry was heard
@@ -583,10 +609,11 @@ void loop() {
         // 1 Hz serial debug: per-type packet rates + last drone RSSI + link LQ.
         // rc = TX downlink, sync = TX sync, tlm = drone telemetry (lap signal).
         if (now - s_tlmLogMs >= 1000) {
-            Serial.printf("[gate_ep1] rc=%u sync=%u tlm=%u/s rssi=%d lq=%u%s\n",
+            Serial.printf("[gate_ep1] rc=%u sync=%u tlm=%u/s rssi=%d lq=%u denom=%u%s\n",
                           (unsigned)s_rcCount, (unsigned)s_syncCount,
                           (unsigned)s_tlmCount, (int)s_lastTlmRssi, (unsigned)lqPct(),
-                          (s_tlmCount == 0) ? " (no telem)" : "");
+                          (unsigned)s_tlmDenom,
+                          (!s_nonceValid) ? " (no sync)" : (s_tlmCount == 0) ? " (no telem)" : "");
             s_rcCount   = 0;
             s_syncCount = 0;
             s_tlmCount  = 0;

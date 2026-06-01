@@ -63,10 +63,16 @@
 // regval = (uint32_t)(freqHz / FREQ_STEP)
 #define FREQ_STEP  (52000000.0 / 262144.0)
 
-// ---- SetRx timeout: 15.625 µs tick, 0xFFFF ≈ 1024 ms (longer than any slot) ----
-#define RX_TIMEOUT_TICK            0x00   // SX1280_RADIO_TICK_SIZE_0015_US
-#define RX_TIMEOUT_HI              0xFF
-#define RX_TIMEOUT_LO              0xFF
+// ---- SetRx timeout: 0x0000 = Rx Continuous (never returns to STANDBY on packet reception).
+// This is essential for passive sniffing: within one 8 ms dwell there are up to 4 LoRa
+// slots (2 TX downlink + 2 drone TLM at ratio 1:2).  The SX1280 single-Rx mode
+// (non-zero period count) returns to STANDBY after the first received packet, so
+// every slot after the first is missed — giving rc≈125/s and tlm=0 forever.
+// Continuous mode keeps the radio in RX until we explicitly call SetStandby (which
+// sxSetFrequencyHz already does at the start of every channel hop).
+#define RX_TIMEOUT_TICK            0x00
+#define RX_TIMEOUT_HI              0x00
+#define RX_TIMEOUT_LO              0x00
 
 // ---- Module state ----
 static int8_t s_last_rssi = -127;

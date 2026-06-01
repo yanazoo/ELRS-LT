@@ -93,6 +93,11 @@
 #define OTA_SYNC_UID4_BYTE      5
 #define OTA_SYNC_UID5_BYTE      6
 #define OTA_SYNC_UID5_HIBITS    0xC0   // only bits[7:6] of byte[6] are UID[5]
+// byte[3]: rateIndex[7:4] | tlmRatioIdx[3:1] | switchEncMode[0]
+// tlmRatioIdx: 0=off 1=1:128 2=1:64 3=1:32 4=1:16 5=1:8 6=1:4 7=1:2
+#define OTA_SYNC_TLMRATIO_BYTE  3
+#define OTA_SYNC_TLMRATIO_SHIFT 1
+#define OTA_SYNC_TLMRATIO_MASK  0x07
 
 // Auto-discovery candidate space:
 //   UID[0:1] = 0x00 always (ELRS convention)
