@@ -51,6 +51,18 @@
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
+// ---- Hybrid TLM isolation ----
+// A connected ELRS TX sends SYNC packets only intermittently (every few seconds
+// when linked, more often while connecting/idle — which is exactly the state a
+// pilot calibrates in).  Each SYNC anchors the nonce phase; we then keep
+// classifying TLM slots by free-running the nonce grid for NONCE_FRESH_MS.
+// The EP1/EP2 TCXO drift is far below one 2 ms slot over this window, so the
+// slot phase stays valid between SYNCs.  While the nonce is "fresh" we report
+// ONLY the drone's telemetry-slot RSSI (the stationary TX downlink is excluded);
+// once it goes stale (sustained armed flight with no SYNC) we fall back to the
+// proven max-RSSI-of-all-packets behaviour so lap detection never regresses.
+#define NONCE_FRESH_MS    10000     // free-run the nonce phase this long after a SYNC
+
 // ---- Telemetry-only RSSI (lap timing) ----
 // The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
 // link the drone (RX) only transmits during telemetry slots (OTA type 0b11);
