@@ -20,12 +20,13 @@
 // ---- SX1280 command opcodes ----
 #define SX_CMD_GET_STATUS          0xC0
 #define SX_CMD_GET_RX_BUFFER_STS   0x17
-#define SX_CMD_READ_BUFFER         0x1E
+#define SX_CMD_READ_BUFFER         0x1B
 #define SX_CMD_SET_STANDBY         0x80
 #define SX_CMD_SET_PACKET_TYPE     0x8A
 #define SX_CMD_SET_RF_FREQUENCY    0x86
 #define SX_CMD_SET_MOD_PARAMS      0x8B
 #define SX_CMD_SET_PKT_PARAMS      0x8C
+#define SX_CMD_SET_BUFFER_BASE     0x8F
 #define SX_CMD_SET_DIO_IRQ         0x8D
 #define SX_CMD_SET_RX              0x82
 #define SX_CMD_GET_IRQ_STATUS      0x15
@@ -217,6 +218,13 @@ bool sxBegin() {
     };
     writeCmd(SX_CMD_SET_PKT_PARAMS, pktParams, 7);
 
+    // SetBufferBaseAddress: TX base = 0, RX base = 0.  This makes every received
+    // packet land at offset 0, so ReadBuffer from the rxStartBufferPointer (which
+    // equals the RX base) reliably returns the packet bytes.  Defaults to 0 after
+    // reset, but ELRS sets it explicitly and so do we (defensive).
+    uint8_t baseAddr[2] = { 0x00, 0x00 };
+    writeCmd(SX_CMD_SET_BUFFER_BASE, baseAddr, 2);
+
     // SetDioIrqParams: route RX_DONE + CRC_ERROR to DIO1.
     uint16_t mask = IRQ_RX_DONE | IRQ_CRC_ERROR;
     uint8_t irqParams[8] = {
@@ -269,19 +277,23 @@ int8_t sxReadRssiNow() {
 }
 
 uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen) {
-    // GetRxBufferStatus returns: [status(ignored), payloadLen, rxStartBufPtr]
+    // GetRxBufferStatus returns [rxPayloadLength, rxStartBufferPointer] (after the
+    // discarded status byte).  In LoRa IMPLICIT-header mode — which ELRS uses —
+    // there is no length field on air, so rxPayloadLength is reported as 0.  We
+    // therefore IGNORE the reported length and read the fixed configured packet
+    // size (maxLen = ELRS_LORA_PAYLOAD = 8).  Previously the code trusted the
+    // reported 0 and returned without reading, leaving buf uninitialised — so the
+    // packet type / SYNC were never actually decoded.
     uint8_t sts[2] = {};
     readCmd(SX_CMD_GET_RX_BUFFER_STS, sts, 2);
-    uint8_t payloadLen = sts[0];
-    uint8_t startPtr   = sts[1];
-    uint8_t n = (payloadLen < maxLen) ? payloadLen : maxLen;
-    if (n == 0) return 0;
+    uint8_t startPtr = sts[1];   // = RX base address (0); valid even in implicit mode
+    uint8_t n = maxLen;
 
     busyWait();
     digitalWrite(SX_PIN_NSS, LOW);
-    SPI.transfer(SX_CMD_READ_BUFFER);
-    SPI.transfer(startPtr);  // buffer offset
-    SPI.transfer(0x00);      // NOP status byte
+    SPI.transfer(SX_CMD_READ_BUFFER);   // 0x1B (was wrongly 0x1E)
+    SPI.transfer(startPtr);             // buffer offset
+    SPI.transfer(0x00);                // NOP status byte
     for (uint8_t i = 0; i < n; i++) buf[i] = SPI.transfer(0x00);
     digitalWrite(SX_PIN_NSS, HIGH);
     return n;

@@ -57,11 +57,12 @@ static SnifferIdentity_t ident = { {0}, false };
 //           the gate_node EnterAt/ExitAt thresholds are tuned for.
 // When no packets are received (scan/resync) both accumulators stay at floor.
 static int8_t   s_reportRssi  = RSSI_FLOOR_DBM;  // max RSSI of ALL packets since last report
-static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max RSSI of TLM-slot packets since last report
+static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max RSSI of TLM (type 0b11) packets this interval
+static uint8_t  s_tlmIntervalCnt = 0;  // TLM packets this report interval (gate against bit-flips)
 static uint32_t s_lastSyncMs  = 0;     // millis() of the most recent SYNC packet
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
-static uint16_t s_tlmPktCount = 0;     // TLM-classified packets since last debug log
+static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
 static uint16_t s_syncCount   = 0;     // SYNC packets since last log
 
 // ---- Raw diagnostics (independent of classification) ----
@@ -603,29 +604,15 @@ void loop() {
                 if (rssiNow > s_reportRssi)  s_reportRssi  = rssiNow;
                 s_pktCount++;
 
-                // Classify this packet's slot as TLM (drone uplink) or downlink
-                // (TX) using the nonce.  In ELRS 3.x both reuse OTA type 0b00, so
-                // type alone cannot tell them apart — only the slot does:
-                //   nonce = s_nonceBase (slot-0 of this dwell) + slotInDwell.
-                // slotInDwell is derived from the absolute hop grid (anchored to
-                // SYNC), NOT s_dwellStartUs, so loop-overhead jitter between
-                // dwells does not shift the slot index.  A detection time of
-                // slot_start+airtime divides down to the correct slot.
-                bool isTlm = false;
-                if (s_nonceValid && s_tlmDenom >= 2) {
-                    uint32_t dwellStartGrid = s_nextHopUs - FHSS_HOP_PERIOD_US;
-                    int32_t  intoUs = (int32_t)(micros() - dwellStartGrid);
-                    uint32_t slotU  = (intoUs <= 0) ? 0
-                                      : ((uint32_t)intoUs / ELRS_SLOT_US);
-                    if (slotU >= FHSS_HOP_INTERVAL) slotU = FHSS_HOP_INTERVAL - 1;
-                    uint8_t nonce = (uint8_t)(s_nonceBase + slotU);
-                    isTlm = ((nonce % s_tlmDenom) == 0);
-                }
-                // ELRS 2.x legacy: an explicit type-0b11 packet is always TLM.
-                if (pktType == OTA_TYPE_TLM) isTlm = true;
-                if (isTlm) {
+                // ELRS 3.6.3: the drone's telemetry uplink is OTA type 0b11
+                // (PACKET_TYPE_TLM).  The TX only ever sends RC=0b00 / MSP=0b01 /
+                // SYNC=0b10, so type 0b11 alone identifies the drone — independent
+                // of TX level or movement.  This is the primary separation now
+                // that the payload is actually read (see sxReadPayload fix).
+                if (pktType == OTA_TYPE_TLM) {
                     if (rssiNow > s_tlmRssiMax) s_tlmRssiMax = rssiNow;
                     s_tlmPktCount++;
+                    if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
                 }
 
                 // TX-background notch: histogram every packet (for the mode =
@@ -708,19 +695,17 @@ void loop() {
 
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
-        bool nonceFresh = s_nonceValid && (now - s_lastSyncMs) < NONCE_FRESH_MS;
+        bool tlmSeen = (s_tlmIntervalCnt >= TLM_MIN_PKTS);
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Tier 1 (nonceFresh): SYNC-anchored nonce isolates the telemetry slot
-            //   exactly — report only the drone's TLM-slot RSSI.
-            // Tier 2 (txBgValid): no SYNC, but the TX level is known — report the
-            //   drone with the constant TX suppressed.  Prefer the near (above-TX)
-            //   cluster (a gate pass); fall back to the far (below-TX) cluster so a
-            //   drone weaker than the TX is still seen instead of masked.  Floor
-            //   when only TX is present (no drone) -> baseline drops off the TX.
-            // Tier 3 (startup / low traffic): max RSSI of all packets (legacy).
+            // Tier 1 (3.6.3 primary): TLM-type (0b11) packets are the drone — report
+            //   their max RSSI.  TX-independent; floors when the drone is absent
+            //   (no telemetry), so the baseline drops cleanly off the TX level.
+            // Tier 2 (fallback, e.g. payload read degraded): TX-background notch
+            //   by level — near cluster (gate pass), else far cluster.
+            // Tier 3 (startup / low traffic): max RSSI of all packets.
             // All accumulators reset to floor so gate_node sees floor on silence.
             int8_t reportRssi;
-            if (nonceFresh) {
+            if (tlmSeen) {
                 reportRssi = s_tlmRssiMax;
             } else if (s_txBgValid) {
                 if      (s_rxNearCnt >= TXBG_RX_MIN_PKTS) reportRssi = s_rxNearMax;
@@ -736,7 +721,7 @@ void loop() {
             s_dbgNearCnt += s_rxNearCnt;
             s_dbgFarCnt  += s_rxFarCnt;
             s_reportRssi = (int8_t)RSSI_FLOOR_DBM;
-            s_tlmRssiMax = (int8_t)RSSI_FLOOR_DBM;
+            s_tlmRssiMax = (int8_t)RSSI_FLOOR_DBM; s_tlmIntervalCnt = 0;
             s_rxNearMax  = (int8_t)RSSI_FLOOR_DBM; s_rxNearCnt = 0;
             s_rxFarMax   = (int8_t)RSSI_FLOOR_DBM; s_rxFarCnt  = 0;
             lastReport = now;
@@ -751,7 +736,7 @@ void loop() {
         //   rxNear = count@maxRSSI of above-TX (near drone) packets this second
         //   rxFar  = count@maxRSSI of below-TX (far drone) packets this second
         if (now - s_tlmLogMs >= 1000) {
-            const char *mode = nonceFresh ? "TLM" : (s_txBgValid ? "RXBG" : "ALL");
+            const char *mode = (s_tlmPktCount > 0) ? "TLM" : (s_txBgValid ? "RXBG" : "ALL");
             Serial.printf("[gate_ep1] pkts=%u sync=%u/s rmax=%d lq=%u mode=%s txBg=%d%s\n",
                           (unsigned)s_pktCount, (unsigned)s_syncCount,
                           (int)s_rawRssiMax, (unsigned)lqPct(), mode,

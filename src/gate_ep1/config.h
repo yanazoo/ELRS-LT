@@ -78,6 +78,14 @@
 #define TXBG_MIN_PKTS        40     // min packets in a window to trust the txBg estimate
 #define TXBG_RX_MIN_PKTS      2     // min RX packets per report interval (rejects 1-pkt noise)
 
+// ---- Telemetry (drone) isolation by OTA type (ELRS 3.6.3) ----
+// In ELRS 3.6.3 the drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM);
+// the TX only sends RC=0b00 / MSP=0b01 / SYNC=0b10.  So type 0b11 identifies the
+// drone regardless of TX level or movement.  Require this many 0b11 packets in a
+// report interval before trusting it, so a single bit-flipped type byte (LoRa CRC
+// is off) cannot leak a TX packet into the telemetry trace.
+#define TLM_MIN_PKTS          2
+
 // ---- Telemetry-only RSSI (lap timing) ----
 // The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
 // link the drone (RX) only transmits during telemetry slots (OTA type 0b11);
