@@ -69,6 +69,26 @@ static uint16_t s_rawType[4]   = {0, 0, 0, 0};
 static uint8_t  s_maxPerDwell  = 0;
 static int8_t   s_rawRssiMax   = RSSI_FLOOR_DBM;
 
+// ---- TX-background notch (SYNC-free RX isolation) ----
+// The stationary TX shows up as a constant, dominant RSSI cluster; its level is
+// the mode of the per-window RSSI histogram (s_txBg).  Packets that deviate from
+// that level by more than TXBG_GUARD_DB are the drone (RX): stronger = near pass,
+// weaker = far/fast pass below the TX floor.  We report the drone level with the
+// TX suppressed, so the trace baseline is the noise floor instead of the TX.
+static uint16_t s_rssiHist[128];                 // RSSI histogram (index = -dBm)
+static int8_t   s_txBg        = RSSI_FLOOR_DBM;  // estimated constant TX level
+static bool     s_txBgValid   = false;           // true once enough traffic seen
+static uint32_t s_txBgMs      = 0;               // last txBg recompute (millis)
+static int8_t   s_rxNearMax   = RSSI_FLOOR_DBM;  // max above-TX RSSI this report interval
+static uint8_t  s_rxNearCnt   = 0;               // above-TX packets this report interval
+static int8_t   s_rxFarMax    = RSSI_FLOOR_DBM;  // max below-TX RSSI this report interval
+static uint8_t  s_rxFarCnt    = 0;               // below-TX packets this report interval
+// 1 Hz diagnostics for the notch
+static int8_t   s_dbgNearMax  = RSSI_FLOOR_DBM;
+static int8_t   s_dbgFarMax   = RSSI_FLOOR_DBM;
+static uint16_t s_dbgNearCnt  = 0;
+static uint16_t s_dbgFarCnt   = 0;
+
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
 static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
 static uint32_t s_dwellStartUs = 0;    // micros() recorded just before sxSetFrequencyHz
@@ -587,6 +607,24 @@ void loop() {
                     s_tlmPktCount++;
                 }
 
+                // TX-background notch: histogram every packet (for the mode =
+                // constant TX level) and split packets that deviate from the
+                // current TX level into the drone's near (above) / far (below)
+                // clusters.  Used by Tier 2 below when no SYNC/nonce is available.
+                int idx = -(int)rssiNow;
+                if (idx < 0)   idx = 0;
+                if (idx > 127) idx = 127;
+                s_rssiHist[idx]++;
+                if (s_txBgValid) {
+                    if (rssiNow > (int)s_txBg + TXBG_GUARD_DB) {
+                        if (rssiNow > s_rxNearMax) s_rxNearMax = rssiNow;
+                        if (s_rxNearCnt < 255) s_rxNearCnt++;
+                    } else if (rssiNow < (int)s_txBg - TXBG_GUARD_DB) {
+                        if (rssiNow > s_rxFarMax) s_rxFarMax = rssiNow;
+                        if (s_rxFarCnt < 255) s_rxFarCnt++;
+                    }
+                }
+
                 if (pktType == OTA_TYPE_SYNC) {
                     // SYNC present (rare in stable link): re-anchor hop grid.
                     s_syncCount++;
@@ -630,46 +668,86 @@ void loop() {
         hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
         if (s_nonceValid) s_nonceBase += FHSS_HOP_INTERVAL;
 
+        // Recompute the TX-background level (mode of the RSSI histogram) on its
+        // own cadence.  The constant TX is the dominant cluster even while the
+        // drone is present, so the mode tracks it robustly.  Requires a minimum
+        // packet count so a sparse/lock-loss window does not produce a bogus txBg.
+        uint32_t now = millis();
+        if (now - s_txBgMs >= TXBG_WINDOW_MS) {
+            uint16_t total = 0, best = 0; int bestIdx = -1;
+            for (int k = 0; k < 128; k++) {
+                total += s_rssiHist[k];
+                if (s_rssiHist[k] > best) { best = s_rssiHist[k]; bestIdx = k; }
+            }
+            s_txBgValid = (total >= TXBG_MIN_PKTS && bestIdx >= 0);
+            if (s_txBgValid) s_txBg = (int8_t)(-bestIdx);
+            memset(s_rssiHist, 0, sizeof(s_rssiHist));
+            s_txBgMs = now;
+        }
+
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
-        uint32_t now = millis();
         bool nonceFresh = s_nonceValid && (now - s_lastSyncMs) < NONCE_FRESH_MS;
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Tier 1 (nonceFresh): report only the drone's telemetry-slot RSSI so
-            //   the stationary TX downlink never shows on the calibration graph.
-            //   s_tlmRssiMax floors when no telemetry was heard (drone off/far).
-            // Tier 2 (fallback): no recent SYNC to phase the slots, so report the
-            //   max RSSI of all packets — the proven max-per-interval behaviour.
-            // Both accumulators reset to floor so gate_node sees floor when no
-            // packets arrive (scan/resync state).
-            int8_t reportRssi = nonceFresh ? s_tlmRssiMax : s_reportRssi;
+            // Tier 1 (nonceFresh): SYNC-anchored nonce isolates the telemetry slot
+            //   exactly — report only the drone's TLM-slot RSSI.
+            // Tier 2 (txBgValid): no SYNC, but the TX level is known — report the
+            //   drone with the constant TX suppressed.  Prefer the near (above-TX)
+            //   cluster (a gate pass); fall back to the far (below-TX) cluster so a
+            //   drone weaker than the TX is still seen instead of masked.  Floor
+            //   when only TX is present (no drone) -> baseline drops off the TX.
+            // Tier 3 (startup / low traffic): max RSSI of all packets (legacy).
+            // All accumulators reset to floor so gate_node sees floor on silence.
+            int8_t reportRssi;
+            if (nonceFresh) {
+                reportRssi = s_tlmRssiMax;
+            } else if (s_txBgValid) {
+                if      (s_rxNearCnt >= TXBG_RX_MIN_PKTS) reportRssi = s_rxNearMax;
+                else if (s_rxFarCnt  >= TXBG_RX_MIN_PKTS) reportRssi = s_rxFarMax;
+                else                                      reportRssi = (int8_t)RSSI_FLOOR_DBM;
+            } else {
+                reportRssi = s_reportRssi;
+            }
             espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
+            // Roll up 1 Hz diagnostics before clearing the interval accumulators.
+            if (s_rxNearMax > s_dbgNearMax) s_dbgNearMax = s_rxNearMax;
+            if (s_rxFarMax  > s_dbgFarMax)  s_dbgFarMax  = s_rxFarMax;
+            s_dbgNearCnt += s_rxNearCnt;
+            s_dbgFarCnt  += s_rxFarCnt;
             s_reportRssi = (int8_t)RSSI_FLOOR_DBM;
             s_tlmRssiMax = (int8_t)RSSI_FLOOR_DBM;
+            s_rxNearMax  = (int8_t)RSSI_FLOOR_DBM; s_rxNearCnt = 0;
+            s_rxFarMax   = (int8_t)RSSI_FLOOR_DBM; s_rxFarCnt  = 0;
             lastReport = now;
         }
 
         // 1 Hz serial debug.
-        //   pkts  = total packets/s (TX downlink + drone uplink)
-        //   tlm   = packets classified as drone telemetry this second
-        //   sync  = TX SYNC packets (intermittent on a linked TX)
-        //   rmax  = strongest packet this second — spikes when drone is close
-        //   mode  = TLM (Tier-1, reporting telemetry only) or ALL (Tier-2 fallback)
+        //   pkts   = total packets/s (TX downlink + drone uplink)
+        //   sync   = TX SYNC packets/s (intermittent on a linked TX; 0 = no nonce)
+        //   rmax   = strongest packet this second
+        //   mode   = TLM (Tier-1 nonce) / RXBG (Tier-2 TX-notch) / ALL (Tier-3)
+        //   txBg   = estimated constant TX level (the cluster being suppressed)
+        //   rxNear = count@maxRSSI of above-TX (near drone) packets this second
+        //   rxFar  = count@maxRSSI of below-TX (far drone) packets this second
         if (now - s_tlmLogMs >= 1000) {
-            Serial.printf("[gate_ep1] pkts=%u tlm=%u sync=%u/s rmax=%d lq=%u mode=%s denom=%u\n",
-                          (unsigned)s_pktCount, (unsigned)s_tlmPktCount,
-                          (unsigned)s_syncCount, (int)s_rawRssiMax, (unsigned)lqPct(),
-                          nonceFresh ? "TLM" : "ALL", (unsigned)s_tlmDenom);
-            Serial.printf("[gate_ep1]   raw t0=%u t1=%u t2=%u t3=%u max/dw=%u rmax=%d\n",
-                          (unsigned)s_rawType[0], (unsigned)s_rawType[1],
-                          (unsigned)s_rawType[2], (unsigned)s_rawType[3],
-                          (unsigned)s_maxPerDwell, (int)s_rawRssiMax);
+            const char *mode = nonceFresh ? "TLM" : (s_txBgValid ? "RXBG" : "ALL");
+            Serial.printf("[gate_ep1] pkts=%u sync=%u/s rmax=%d lq=%u mode=%s txBg=%d%s\n",
+                          (unsigned)s_pktCount, (unsigned)s_syncCount,
+                          (int)s_rawRssiMax, (unsigned)lqPct(), mode,
+                          (int)s_txBg, s_txBgValid ? "" : "(?)");
+            Serial.printf("[gate_ep1]   rxNear=%u@%d rxFar=%u@%d denom=%u tlm=%u t0=%u t3=%u\n",
+                          (unsigned)s_dbgNearCnt, (int)s_dbgNearMax,
+                          (unsigned)s_dbgFarCnt,  (int)s_dbgFarMax,
+                          (unsigned)s_tlmDenom, (unsigned)s_tlmPktCount,
+                          (unsigned)s_rawType[0], (unsigned)s_rawType[3]);
             s_pktCount   = 0;
             s_tlmPktCount = 0;
             s_syncCount  = 0;
             s_rawType[0] = s_rawType[1] = s_rawType[2] = s_rawType[3] = 0;
             s_maxPerDwell = 0;
             s_rawRssiMax  = RSSI_FLOOR_DBM;
+            s_dbgNearMax  = RSSI_FLOOR_DBM; s_dbgNearCnt = 0;
+            s_dbgFarMax   = RSSI_FLOOR_DBM; s_dbgFarCnt  = 0;
             s_tlmLogMs   = now;
         }
 

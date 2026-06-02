@@ -63,6 +63,21 @@
 // proven max-RSSI-of-all-packets behaviour so lap detection never regresses.
 #define NONCE_FRESH_MS    10000     // free-run the nonce phase this long after a SYNC
 
+// ---- TX-background notch (SYNC-free RX isolation) ----
+// On a linked TX that emits no catchable SYNC (nonce unavailable — the case seen
+// on real hardware), the drone (RX telemetry) is still separable from the
+// stationary handset (TX downlink) by LEVEL: the TX is a constant, dominant RSSI
+// cluster, so its level is the statistical mode of all packets over a short
+// window.  We suppress that cluster and report only the packets that deviate from
+// it (the drone).  This removes the ~-67 dBm TX baseline from the signal so the
+// drone-pass spike stands alone with maximum contrast, and lets a drone weaker
+// than the TX (far / fast pass) still be read as the "below-TX" cluster instead
+// of being masked by the constant TX floor.
+#define TXBG_WINDOW_MS     1000     // recompute the TX-background (mode) this often
+#define TXBG_GUARD_DB         5     // a packet must differ from txBg by > this to be RX
+#define TXBG_MIN_PKTS        40     // min packets in a window to trust the txBg estimate
+#define TXBG_RX_MIN_PKTS      2     // min RX packets per report interval (rejects 1-pkt noise)
+
 // ---- Telemetry-only RSSI (lap timing) ----
 // The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
 // link the drone (RX) only transmits during telemetry slots (OTA type 0b11);
