@@ -634,18 +634,30 @@ void loop() {
                 }
 
                 if (pktType == OTA_TYPE_SYNC) {
-                    // SYNC present (rare in stable link): re-anchor hop grid.
-                    s_syncCount++;
-                    hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
-                    uint8_t nonce = buf[OTA_SYNC_NONCE_BYTE];
-                    s_nonceBase = nonce - (nonce % FHSS_HOP_INTERVAL);
-                    uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
-                                     & OTA_SYNC_TLMRATIO_MASK;
-                    s_tlmDenom   = TLM_DENOM_LUT[tlmIdx];
-                    s_nonceValid = (s_tlmDenom >= 2);
-                    if (s_nonceValid) s_lastSyncMs = millis();
-                    uint8_t slotsLeft = FHSS_HOP_INTERVAL - (nonce % FHSS_HOP_INTERVAL);
-                    s_nextHopUs = micros() - PKT_AIRTIME_US + (uint32_t)slotsLeft * ELRS_SLOT_US;
+                    // Validate the SYNC against our bound UID before trusting it.
+                    // LoRa CRC is off, so a garbage packet whose low 2 bits happen
+                    // to be 0b10 would otherwise re-anchor the hop grid (hopIndex /
+                    // s_nextHopUs) to random values and break FHSS lock — exactly
+                    // the resync storm seen on hardware.  A real SYNC carries
+                    // UID3/UID4 (bytes 4/5) and UID5's top bits (byte 6).
+                    bool uidOk = buf[OTA_SYNC_UID3_BYTE] == ident.uid[3] &&
+                                 buf[OTA_SYNC_UID4_BYTE] == ident.uid[4] &&
+                                 ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) &
+                                  OTA_SYNC_UID5_HIBITS) == 0;
+                    if (uidOk) {
+                        // SYNC re-anchors the hop grid phase (improves FOLLOW lock).
+                        s_syncCount++;
+                        hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
+                        uint8_t nonce = buf[OTA_SYNC_NONCE_BYTE];
+                        s_nonceBase = nonce - (nonce % FHSS_HOP_INTERVAL);
+                        uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
+                                         & OTA_SYNC_TLMRATIO_MASK;
+                        s_tlmDenom   = TLM_DENOM_LUT[tlmIdx];
+                        s_nonceValid = (s_tlmDenom >= 2);
+                        if (s_nonceValid) s_lastSyncMs = millis();
+                        uint8_t slotsLeft = FHSS_HOP_INTERVAL - (nonce % FHSS_HOP_INTERVAL);
+                        s_nextHopUs = micros() - PKT_AIRTIME_US + (uint32_t)slotsLeft * ELRS_SLOT_US;
+                    }
                 }
             }
             // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
