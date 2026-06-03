@@ -25,6 +25,6 @@ void initPilots();
 void resetPilots();
 int  findPilotByUID(const uint8_t* uid);
 bool anyPilotRegistered();
-void macToStr(const uint8_t* uid, char* buf);
-void reportScanMac(const uint8_t* uid, int8_t rssi);
+void uidToStr(const uint8_t* uid, char* buf);
+void reportScanUid(const uint8_t* uid, int8_t rssi);
 void resetScanTimers();

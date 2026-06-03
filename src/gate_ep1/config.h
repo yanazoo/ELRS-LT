@@ -25,31 +25,158 @@
 // A solid LED with the TX off = the unit is sitting in bootloader mode.
 
 // ---- ELRS / FHSS ----
-#define FHSS_CHANNEL_COUNT   80     // 2.4GHz ELRS; confirm against ELRS source
-#define ELRS_SLOT_US         4000   // 250Hz default; adjust per packet rate
-#define SX_SWITCH_US         1000   // approx SX1280 frequency switch time
+// Packet-rate dependent timing. Must match the TX (see sx1280_sniffer.cpp for
+// the matching SF/CR/preamble). Currently configured for 500Hz.
+//   500Hz: ELRS_SLOT_US 2000   250Hz: 4000   150Hz: 6666
+#define FHSS_CHANNEL_COUNT   80                          // 2.4GHz ISM unique channels
+#define FHSS_SEQUENCE_LEN    (FHSS_CHANNEL_COUNT * 3)   // 240: 3 complete blocks per ELRS
+#define ELRS_SLOT_US         2000   // 500Hz: 2 ms per packet
+#define SX_SWITCH_US          500   // approx SX1280 standby+freq+rx round trip
+// ELRS TX stays on each FHSS channel for this many consecutive packets before hopping.
+// Must match FHSShopInterval from ELRS expresslrs_mod_settings_s (4 for 500Hz).
+#define FHSS_HOP_INTERVAL    4
+// Time the TX spends on one channel = hopInterval slots. FOLLOW dwells exactly
+// this long (slot-phase locked to the TX) so it catches all interleaved slots.
+#define FHSS_HOP_PERIOD_US   (ELRS_SLOT_US * FHSS_HOP_INTERVAL)   // 8000us @ 500Hz
+// Approx LoRa airtime of one 8-byte SF5/BW800 packet. Used to back-date a SYNC
+// packet's reception to its slot boundary when re-anchoring the hop grid phase.
+#define PKT_AIRTIME_US       1100
 
 // ---- Lock-on tuning ----
-#define SCAN_DWELL_US        1500   // RX dwell per channel during SCAN phase
-#define MISS_STREAK_RESYNC   30     // consecutive misses -> drop back to SCAN
+// SCAN dwell must exceed one packet interval (500Hz = 2000us) so a parked
+// channel reliably catches a packet while the TX is transmitting on it.
+#define SCAN_DWELL_US        2600   // RX dwell per channel during SCAN phase
+#define MISS_STREAK_RESYNC    8     // consecutive empty channel dwells -> back to SCAN
 
 // ---- RSSI reporting ----
 #define RSSI_REPORT_MS       50     // 20 Hz, matches existing RSSI_INTERVAL_MS
 
+// ---- Hybrid TLM isolation ----
+// A connected ELRS TX sends SYNC packets only intermittently (every few seconds
+// when linked, more often while connecting/idle — which is exactly the state a
+// pilot calibrates in).  Each SYNC anchors the nonce phase; we then keep
+// classifying TLM slots by free-running the nonce grid for NONCE_FRESH_MS.
+// The EP1/EP2 TCXO drift is far below one 2 ms slot over this window, so the
+// slot phase stays valid between SYNCs.  While the nonce is "fresh" we report
+// ONLY the drone's telemetry-slot RSSI (the stationary TX downlink is excluded);
+// once it goes stale (sustained armed flight with no SYNC) we fall back to the
+// proven max-RSSI-of-all-packets behaviour so lap detection never regresses.
+#define NONCE_FRESH_MS    10000     // free-run the nonce phase this long after a SYNC
+
+// ---- TX-background notch (SYNC-free RX isolation) ----
+// On a linked TX that emits no catchable SYNC (nonce unavailable — the case seen
+// on real hardware), the drone (RX telemetry) is still separable from the
+// stationary handset (TX downlink) by LEVEL: the TX is a constant, dominant RSSI
+// cluster, so its level is the statistical mode of all packets over a short
+// window.  We suppress that cluster and report only the packets that deviate from
+// it (the drone).  This removes the ~-67 dBm TX baseline from the signal so the
+// drone-pass spike stands alone with maximum contrast, and lets a drone weaker
+// than the TX (far / fast pass) still be read as the "below-TX" cluster instead
+// of being masked by the constant TX floor.
+#define TXBG_WINDOW_MS     1000     // recompute the TX-background (mode) this often
+#define TXBG_GUARD_DB         5     // a packet must differ from txBg by > this to be RX
+#define TXBG_MIN_PKTS        40     // min packets in a window to trust the txBg estimate
+#define TXBG_RX_MIN_PKTS      2     // min RX packets per report interval (rejects 1-pkt noise)
+
+// ---- Telemetry (drone) isolation by OTA type (ELRS 3.6.3) ----
+// In ELRS 3.6.3 the drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM);
+// the TX only sends RC=0b00 / MSP=0b01 / SYNC=0b10.  So type 0b11 identifies the
+// drone regardless of TX level or movement.  Require this many 0b11 packets in a
+// report interval before trusting it, so a single bit-flipped type byte (LoRa CRC
+// is off) cannot leak a TX packet into the telemetry trace.
+#define TLM_MIN_PKTS          2
+
+// ---- Telemetry-only RSSI (lap timing) ----
+// The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
+// link the drone (RX) only transmits during telemetry slots (OTA type 0b11);
+// everything else (RC_DATA/MSP/SYNC) is downlink from the stationary TX and is
+// useless for position.  We therefore report RSSI only from TLM packets.
+//   - The TX downlink is still used to keep FHSS lock (it is always present).
+//   - When no telemetry has been heard for TLM_SILENCE_MS, we emit RSSI_FLOOR_DBM
+//     so the trace falls back to baseline instead of holding the last peak
+//     (required for the exit threshold to fire after a gate pass).
+// NOTE: telemetry cadence = tlmRatio / packetRate.  For crisp lap timing set a
+// high telemetry ratio on the TX (1:2…1:8 @ 500Hz = 4…16 ms between samples).
+// TLM_SILENCE_MS (300) is > the 1:128 interval (256 ms) so it never false-floors.
+#define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
+#define TLM_SILENCE_MS       300    // no TLM for this long -> report floor
+
+// ---- ELRS OTA sync-channel auto-discovery ----
+// Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
+// Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
+#define SYNC_CHANNEL_IDX        41
+#define SYNC_FREQ_HZ            2441400000UL
+
+// ELRS 3.x 8-byte OTA packet layout (verified from OTA.h + rx_main.cpp):
+//   byte[0]: packetType[1:0] | crcHigh[7:2]
+//            0b00=RC_DATA  0b01=MSP  0b10=SYNC  0b11=TLM
+// SYNC packet (byte[0] & 0x03 == 0x02):
+//   byte[1]  fhssIndex    – TX's current hop counter in FHSS sequence
+//   byte[2]  nonce        – packet timing counter
+//   byte[3]  switchEncMode[0] | tlmRatio[3:1] | rateIndex[7:4]
+//   byte[4]  UID[3]       – full byte (known after capture)
+//   byte[5]  UID[4]       – full byte (known after capture)
+//   byte[6]  UID5_field   – (UID[5] & 0xC0) | (modelId & 0x3F)
+//            Only bits[7:6] carry UID[5]; bits[5:0] = model match ID
+//   byte[7]  crcLow
+#define OTA_TYPE_MASK           0x03
+#define OTA_TYPE_SYNC           0x02
+#define OTA_TYPE_TLM            0x03   // telemetry uplink (RX->TX) = drone's signal
+#define OTA_SYNC_FHSS_BYTE      1
+#define OTA_SYNC_NONCE_BYTE     2      // packet counter; (nonce % hopInterval) = slot in dwell
+#define OTA_SYNC_UID3_BYTE      4
+#define OTA_SYNC_UID4_BYTE      5
+#define OTA_SYNC_UID5_BYTE      6
+#define OTA_SYNC_UID5_HIBITS    0xC0   // only bits[7:6] of byte[6] are UID[5]
+// byte[3]: rateIndex[7:4] | tlmRatioIdx[3:1] | switchEncMode[0]
+// tlmRatioIdx: 0=off 1=1:128 2=1:64 3=1:32 4=1:16 5=1:8 6=1:4 7=1:2
+#define OTA_SYNC_TLMRATIO_BYTE  3
+#define OTA_SYNC_TLMRATIO_SHIFT 1
+#define OTA_SYNC_TLMRATIO_MASK  0x07
+
+// Auto-discovery candidate space:
+//   UID[0:1] = 0x00 always (ELRS convention)
+//   UID[3:4] = known from SYNC packet
+//   UID[5] bits[7:6] = known; bits[5:0] = unknown (64 values)
+//   UID[2]  = fully unknown (256 values)
+//   Total: 256 × 64 = 16384 candidates
+// Candidate index: uid[2]*64 + (uid[5]&0x3F)
+#define AUTO_CANDIDATE_COUNT    16384
+// Scan length: 320 hops × 8 ms = 2.56 s → expected ~4 lucky hits.
+// Each "got" hit narrows: 16384→205→3→1.
+#define AUTO_SCAN_HOPS          320
+#define AUTO_MAX_GOT_OBS        8
+
+// ---- ESP-NOW channel (must match Gate Node ESPNOW_CHANNEL) ----
+#define ESPNOW_CHANNEL       1
+
 // ---- Identity ----
-// 6-byte ELRS bind UID this sniffer follows. Provisioned at runtime
-// (UART or ESP-NOW from web node), NOT hardcoded. See secrets.example.h.
 typedef struct { uint8_t uid[6]; bool valid; } SnifferIdentity_t;
 
-// ---- ESP-NOW packet: Gate EP1 -> Gate ESP32 ----
+// ---- ESP-NOW packet: EP1 -> Gate ESP32 (RSSI report, 12 bytes) ----
 // Keep in sync with the matching struct in src/gate_node/promiscuous.*
 typedef struct __attribute__((packed)) {
     uint8_t  pilot_uid[6];   // which pilot's EP1 this RSSI belongs to
     int8_t   rssi;           // measured RSSI (dBm)
-    uint8_t  lq;             // link quality 0-100 (optional, 0 if unused)
+    uint8_t  lq;             // link quality 0-100
     uint32_t ts;             // sniffer millis() timestamp
-} GateEP1Packet_t;
+} GateEP1Packet_t;           // 12 bytes
 
-// Gate ESP32 ESP-NOW peer MAC. Set to your TTGO T8 STA MAC.
-// Keep the real value in secrets.h (gitignored).
-extern const uint8_t GATE_ESP32_MAC[6];
+// ---- ESP-NOW packet: EP1 -> Gate ESP32 (presence beacon, 8 bytes) ----
+#define EP1_BEACON_MAGIC  0xA5
+typedef struct __attribute__((packed)) {
+    uint8_t magic;   // EP1_BEACON_MAGIC = 0xA5
+    uint8_t state;   // 0=PROVISION 1=SCAN 2=FOLLOW
+    uint8_t uid[6];  // current UID (all-zero if not provisioned)
+} GateEP1BeaconPacket_t;     // 8 bytes
+
+// ---- ESP-NOW packet: Gate ESP32 -> EP1 (provisioning, 7 bytes) ----
+#define GATE_PROV_MAGIC   0xB1
+typedef struct __attribute__((packed)) {
+    uint8_t magic;   // GATE_PROV_MAGIC = 0xB1
+    uint8_t uid[6];  // ELRS bind UID to follow (all-zero = clear/stop)
+} GateProvisionPacket_t;     // 7 bytes
+
+// NOTE: EP1 no longer needs the Gate ESP32 MAC address. Beacons and RSSI
+// reports are sent to broadcast (FF:FF:FF:FF:FF:FF); the Gate Node learns
+// each EP1's MAC from the receive callback's src_addr.

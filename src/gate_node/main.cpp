@@ -59,7 +59,7 @@ void loop() {
             pilots[idx].rawRssi = pkt.rssi;
             pilots[idx].lastPacketTime = now;
         } else {
-            reportScanMac(pkt.pilot_uid, pkt.rssi);
+            reportScanUid(pkt.pilot_uid, pkt.rssi);
         }
     }
 

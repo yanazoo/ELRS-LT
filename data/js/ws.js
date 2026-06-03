@@ -63,7 +63,7 @@ function onMsg(d){
     var s=d.pilot;if(s<0||s>=N)return;
     var p=slots[s];
     var prevCrossing=p.crossing;
-    p.rssiSignal=d.signal!==false;
+    p.rssiSignal=(d.signal===true);  // strict: anything other than true is "no signal"
     p.rssi=p.rssiSignal?(d.rssi!==undefined?d.rssi:p.rssi):-120;
     p.crossing=p.rssiSignal&&(d.crossing!==undefined?d.crossing:p.crossing);
     if(d.name&&d.name!=='---')p.name=d.name;
@@ -83,6 +83,7 @@ function onMsg(d){
     var calR=p.calRssiEl||(p.calRssiEl=document.getElementById('calRssi'+s));
     if(calR){var cv=p.rssiSignal?p.rssi:'---';if(calR._v!==cv){calR.textContent=cv;calR._v=cv;}}
     pushChart(s,p.rssiSignal?p.rssi:-120,p.crossing);
+    if(typeof updateCalibStatus==='function')updateCalibStatus(s);
     return;
   }
   if(d.type==='gate_start'){
@@ -116,12 +117,23 @@ function onMsg(d){
       document.getElementById('lapBody'+p.id).innerHTML='';
       document.getElementById('rcDelta'+p.id).textContent='';
       updateRaceCard(p);});
+    if(editingRosterId!==null){clearTimeout(_editSaveTimer);editingRosterId=null;}
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
     return;
   }
   if(d.type==='race_resume'){
-    raceRunning=true;raceStarted=true;setBtns(true);resumeTimer();return;
+    raceRunning=true;raceStarted=true;setBtns(true);resumeTimer();
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
+    return;
   }
-  if(d.type==='race_stop'){raceRunning=false;setBtns(false);stopTimer();return;}
+  if(d.type==='race_stop'){
+    raceRunning=false;setBtns(false);stopTimer();
+    if(typeof renderRoster==='function')renderRoster();
+    if(typeof updateEp1List==='function')updateEp1List();
+    return;
+  }
   if(d.type==='sd_status'){updateSdSection(d.present);return;}
   if(d.type==='sd_restore_done'){
     toast('✅ SDから'+((d.pilots&&JSON.parse(d.pilots).length)||'?')+'人分を復元しました',3000);
@@ -149,6 +161,26 @@ function onMsg(d){
     }else{toast('削除失敗: '+d.path);}
     return;
   }
+  if(d.type==='ep1_hello'){
+    var _mac=d.mac;
+    ep1Nodes[_mac]={mac:_mac,state:d.state,uid:d.uid||'',lastSeenAt:Date.now()};
+    // Auto-assign to next free slot in arrival order (skip if already assigned or race running)
+    if(!raceRunning && !slotEp1Macs.includes(_mac)){
+      var _free=slotEp1Macs.findIndex(function(m){return !m;});
+      if(_free>=0){
+        slotEp1Macs[_free]=_mac;
+        fetch('/api/ep1/slots',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({slots:slotEp1Macs})}).catch(function(){});
+      }
+    }
+    if(typeof updateEp1List==='function')updateEp1List();
+    if(typeof updateCalibStatus==='function'){
+      var _sl=slotEp1Macs.indexOf(_mac);
+      if(_sl>=0)updateCalibStatus(_sl);
+    }
+    return;
+  }
 }
 
 async function loadRoster(){
@@ -170,6 +202,8 @@ async function loadAll(){
     var rs=await fetch('/api/sd/status');
     if(rs.ok){var sd=await rs.json();updateSdSection(sd.present);}
   }catch(e){}
+
+  if(typeof loadEp1Slots==='function')await loadEp1Slots();
 
   try{
     var ra=await fetch('/api/active');if(ra.ok){

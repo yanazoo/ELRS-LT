@@ -4,16 +4,17 @@
 #include "pilots.h"
 #include "sd_gate.h"
 #include "config.h"
+#include "promiscuous.h"
 
 uint32_t gCooldownMs = COOLDOWN_MS;
 
 void sendLap(int idx, uint32_t lapMs) {
-    char macStr[18];
-    macToStr(pilots[idx].uid, macStr);
+    char uidStr[18];
+    uidToStr(pilots[idx].uid, uidStr);
     JsonDocument doc;
     doc["type"]   = "lap";
     doc["pilot"]  = idx;
-    doc["uid"]    = macStr;
+    doc["uid"]    = uidStr;
     doc["rssi"]   = pilots[idx].peakRssi;
     doc["ts"]     = pilots[idx].peakTime;
     doc["lapMs"]  = lapMs;
@@ -25,14 +26,14 @@ void sendLap(int idx, uint32_t lapMs) {
 }
 
 void sendRssi(int idx, uint32_t now) {
-    char macStr[18];
-    macToStr(pilots[idx].uid, macStr);
+    char uidStr[18];
+    uidToStr(pilots[idx].uid, uidStr);
     bool hasSignal = pilots[idx].lastPacketTime > 0 &&
                      (now - pilots[idx].lastPacketTime) < SIGNAL_LOST_MS;
     JsonDocument doc;
     doc["type"]     = "rssi";
     doc["pilot"]    = idx;
-    doc["uid"]      = macStr;
+    doc["uid"]      = uidStr;
     doc["rssi"]     = (int)pilots[idx].emaRssi;
     doc["raw"]      = pilots[idx].rawRssi;
     doc["crossing"] = pilots[idx].crossing;
@@ -136,5 +137,16 @@ void processWebCmd(const String& line) {
         sdPollEnabled = doc["enable"] | false;
         if (sdPollEnabled) sdSendStatus();
         Serial.printf("[Gate] SD poll %s\n", sdPollEnabled ? "on" : "off");
+
+    } else if (strcmp(action, "provision_ep1") == 0) {
+        const char* macStr = doc["mac"] | "";
+        const char* uidStr = doc["uid"] | "";
+        if (strlen(macStr) != 17 || strlen(uidStr) != 17) return;
+        uint8_t mac[6], uid[6];
+        sscanf(macStr, "%02hhX:%02hhX:%02hhX:%02hhX:%02hhX:%02hhX",
+               &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
+        sscanf(uidStr, "%02hhX:%02hhX:%02hhX:%02hhX:%02hhX:%02hhX",
+               &uid[0], &uid[1], &uid[2], &uid[3], &uid[4], &uid[5]);
+        espnowProvisionMac(mac, uid);
     }
 }

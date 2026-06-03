@@ -4,6 +4,14 @@ import os
 # arduino-esp32 3.x added a "Network" library that WiFi.h depends on.
 # PlatformIO does not automatically include it when the WiFi framework library
 # pulls it in.
+#
+# IMPORTANT: this script must NOT run for non-ESP32 environments (e.g. the
+# gate_ep1 ESP8266 sniffer). Appending framework-arduinoespressif32 library
+# paths to a CPPPATH that's meant to be ESP8266-only would silently mix
+# headers from the two frameworks (FS.h / SPI.h collisions).
+
+if env.subst("$PIOPLATFORM") != "espressif32":
+    Return()
 
 arduino_libs = os.path.join(
     env.subst("$PROJECT_PACKAGES_DIR"),

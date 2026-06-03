@@ -22,7 +22,10 @@ function buildCalibCards(){
     d.innerHTML=
       '<div class="calib-header '+PCLS[p.id]+'">'
         +'<span id="calName'+p.id+'">'+esc(p.name==='---'?'Ch'+(p.id+1):p.name)+'</span>'
-        +'<span class="rssi-live-badge">RSSI: <strong id="calRssi'+p.id+'">---</strong> dBm</span>'
+        +'<span class="rssi-live-badge">'
+          +'<span id="calRssiWrap'+p.id+'">RSSI: <strong id="calRssi'+p.id+'">---</strong> dBm</span>'
+          +'<span class="cal-ep1-st off" id="calEp1St'+p.id+'" style="display:none"></span>'
+        +'</span>'
       +'</div>'
       +'<canvas id="calCanvas'+p.id+'"></canvas>'
       +'<div class="calib-sliders">'
@@ -41,6 +44,7 @@ function buildCalibCards(){
       +'</div>';
     g.appendChild(d);
     p.calRssiEl=null;
+    updateCalibStatus(p.id);
     setTimeout(()=>initChart(p.id),0);
   });
 }
@@ -58,6 +62,31 @@ function pushChart(id,rssi,crossing){
   var c=charts[id];if(!c)return;
   c.data.copyWithin(0,1);c.data[199]=rssi;c.cross.copyWithin(0,1);c.cross[199]=crossing?1:0;
   chartDirty[id]=true;
+}
+
+// Shows the EP1 link state on each calib card whenever no live RSSI is
+// flowing, so the operator can see WHY a channel is silent rather than just
+// "---": unassigned / no beacon / awaiting provision / searching for the TX.
+function updateCalibStatus(id){
+  var wrap=document.getElementById('calRssiWrap'+id);
+  var st=document.getElementById('calEp1St'+id);
+  if(!wrap||!st)return;
+  if(slots[id].rssiSignal){
+    if(st._shown!==false){wrap.style.display='';st.style.display='none';st._shown=false;}
+    return;
+  }
+  var mac=slotEp1Macs[id];
+  var msg='---',cls='off';
+  if(!mac){msg='EP1 未割当';}
+  else{
+    var n=ep1Nodes[mac];
+    if(!n||Date.now()-n.lastSeenAt>30000){msg='EP1 未接続';}
+    else if(n.state===0){msg='設定待ち…';cls='prov';}
+    else if(n.state===1){msg='📡 電波待ち';cls='scan';}
+    else if(n.state===2){msg='追跡中・信号待ち';cls='warn';}
+  }
+  if(st._shown!==true){wrap.style.display='none';st.style.display='';st._shown=true;}
+  if(st._m!==msg){st.textContent=msg;st.className='cal-ep1-st '+cls;st._m=msg;}
 }
 
 function calcChartRange(id){

@@ -64,6 +64,7 @@ extern String      restoreBuffer[MAX_REGISTERED];
 extern int         restoreCount;
 extern ScanMac     scanMacs[MAX_SCAN_MACS];
 extern int         scanMacCount;
+extern char        slotEp1Mac[MAX_ACTIVE][18];  // EP1 MAC per slot, empty = none
 
 extern AsyncWebServer server;
 extern AsyncWebSocket ws;

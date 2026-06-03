@@ -10,8 +10,19 @@ bool sxBegin();
 // Park the radio on a specific RF frequency (Hz) and enter continuous RX.
 void sxSetFrequencyHz(uint32_t freqHz);
 
-// Read instantaneous RSSI (dBm, negative). Valid after a packet or in RX.
+// Read instantaneous RSSI (dBm, negative). Returns the value cached by the
+// last sxReadRssiNow() call.
 int8_t sxReadRssi();
+
+// Read the RSSI (dBm) of the most recently received packet directly from the
+// radio (GetPacketStatus).  sxPacketReceived() no longer reads RSSI itself, to
+// keep per-packet handling short, so call this for packets you actually report
+// (i.e. telemetry uplink), right after sxReadPayload().
+int8_t sxReadRssiNow();
 
 // True if a packet was received since the last check (sync detection).
 bool sxPacketReceived();
+
+// Read the payload of the last received packet into buf (up to maxLen bytes).
+// Returns the number of bytes actually copied.  Call after sxPacketReceived().
+uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen);
