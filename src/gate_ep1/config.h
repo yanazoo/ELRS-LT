@@ -81,10 +81,23 @@
 // ---- Telemetry (drone) isolation by OTA type (ELRS 3.6.3) ----
 // In ELRS 3.6.3 the drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM);
 // the TX only sends RC=0b00 / MSP=0b01 / SYNC=0b10.  So type 0b11 identifies the
-// drone regardless of TX level or movement.  Require this many 0b11 packets in a
-// report interval before trusting it, so a single bit-flipped type byte (LoRa CRC
-// is off) cannot leak a TX packet into the telemetry trace.
-#define TLM_MIN_PKTS          2
+// drone regardless of TX level or movement.  We hold the latest telemetry RSSI
+// and only fall to the floor after no telemetry for an adaptive "silence" window.
+//
+// The window scales with the telemetry ratio (denom) read from the SYNC packet:
+//   silence = (denom * ELRS_SLOT_US / 1000) * TLM_SILENCE_MARGIN, clamped to
+//             [TLM_SILENCE_MIN_MS, TLM_SILENCE_MAX_MS]
+// telemetry interval per ratio @500Hz: 1:8=16ms 1:16=32 1:32=64 1:64=128 1:128=256.
+// So low ratios -> short, responsive timeout; high/sparse ratios -> long enough
+// that the trace does not flicker to the floor between samples.  This is what
+// lets ratios up to 1:128 (incl. the 500 Hz "Std" default) be measured at all.
+// NOTE: a single telemetry packet refreshes the hold (no per-interval minimum);
+// with LoRa CRC off a bit-flipped RC type byte can therefore inject a brief false
+// sample — acceptable here, removable later by adding OTA CRC validation.
+#define TLM_SILENCE_MARGIN      3   // hold timeout = telemetry interval x this
+#define TLM_SILENCE_MIN_MS    120   // floor for low ratios (responsive drop-out)
+#define TLM_SILENCE_MAX_MS    600   // cap for 1:128 (~256 ms interval)
+#define TLM_SILENCE_DEFAULT_MS 300  // used until the first SYNC reveals the ratio
 
 // ---- Telemetry-only RSSI (lap timing) ----
 // The lap-timing signal must come from the DRONE, not the handset.  In an ELRS
