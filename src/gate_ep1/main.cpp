@@ -59,7 +59,6 @@ static SnifferIdentity_t ident = { {0}, false };
 static int8_t   s_reportRssi  = RSSI_FLOOR_DBM;  // max RSSI of ALL packets since last report
 static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max RSSI of TLM (type 0b11) packets this interval
 static uint8_t  s_tlmIntervalCnt = 0;  // TLM packets this report interval (gate against bit-flips)
-static uint32_t s_lastSyncMs  = 0;     // millis() of the most recent SYNC packet
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
@@ -93,22 +92,6 @@ static uint16_t s_dbgFarCnt   = 0;
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
 static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
 static uint32_t s_dwellStartUs = 0;    // micros() recorded just before sxSetFrequencyHz
-
-// ---- Nonce-based TLM slot detection ----
-// In ELRS 3.x, downlink (RC_DATA) and uplink (LINKSTATS/TLM) both use OTA
-// packet type 0b00 — they cannot be distinguished by the type field alone.
-// The TX only transmits in downlink slots; the drone only transmits in TLM
-// slots.  Which slots are TLM is determined by:
-//   OtaNonce % tlmDenom == 0   (verified from ELRS rx_main.cpp)
-// We learn OtaNonce and tlmDenom from the SYNC packet and then track nonce
-// forward (+=hopInterval per dwell).  Before the first SYNC, RSSI stays at
-// floor (no false laps from TX downlink).
-static bool    s_nonceValid = false;  // true once a SYNC has provided a reference
-static uint8_t s_nonceBase  = 0;      // OtaNonce at slot-0 of the current dwell
-static uint8_t s_tlmDenom   = 0;      // TLM denominator (2/4/8/.../128, 0=off)
-// Denominator lookup: SYNC byte[3] bits[3:1] index → denominator
-// 0=off 1=1:128 2=1:64 3=1:32 4=1:16 5=1:8 6=1:4 7=1:2
-static const uint8_t TLM_DENOM_LUT[8] = { 0, 128, 64, 32, 16, 8, 4, 2 };
 
 // ---- ESP-NOW provision flag (set from network-task ISR context) ----
 // Declared here so auto-discovery can abort early when a provision arrives.
@@ -639,7 +622,6 @@ void loop() {
             if (++missStreak >= MISS_STREAK_RESYNC) {
                 state = ST_SCAN;
                 s_nextHopUs  = 0;    // force grid re-seat on next lock
-                s_nonceValid = false;
                 Serial.print(F("[gate_ep1] resync lq="));
                 Serial.println(lqPct());
             }
@@ -648,7 +630,6 @@ void loop() {
         // Advance to the next channel and the next grid slot.
         s_nextHopUs += FHSS_HOP_PERIOD_US;
         hopIndex = (hopIndex + 1) % FHSS_SEQUENCE_LEN;
-        if (s_nonceValid) s_nonceBase += FHSS_HOP_INTERVAL;
 
         // Recompute the TX-background level (mode of the RSSI histogram) on its
         // own cadence.  The constant TX is the dominant cluster even while the
