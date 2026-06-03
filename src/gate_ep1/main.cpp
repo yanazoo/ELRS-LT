@@ -90,16 +90,6 @@ static int8_t   s_dbgFarMax   = RSSI_FLOOR_DBM;
 static uint16_t s_dbgNearCnt  = 0;
 static uint16_t s_dbgFarCnt   = 0;
 
-// ---- Raw OTA byte dump (alignment diagnosis vs the ELRS 3.6.3 layout) ----
-// ELRS 3.6.3: byte0 low-2-bits = type (RC=0b00, MSP=0b01, SYNC=0b10, TLM=0b11).
-// The link currently decodes every packet as 0b11, which is impossible if byte0
-// is aligned, so we dump a few raw packets/s to find the true offset.  We keep
-// the dominant packet plus up to 3 whose byte0 differs (to catch SYNC/RC/TLM).
-static uint8_t  s_dumpBuf[4][8];
-static int8_t   s_dumpRssi[4];
-static uint8_t  s_dumpLen[4];
-static uint8_t  s_dumpN = 0;
-
 // ---- FOLLOW hop-timing grid (slot-phase locked to the TX) ----
 static uint32_t s_nextHopUs    = 0;    // absolute deadline to hop to next channel
 static uint32_t s_dwellStartUs = 0;    // micros() recorded just before sxSetFrequencyHz
@@ -581,24 +571,17 @@ void loop() {
                 dwellPkts++;
                 lqPush(true);
                 uint8_t buf[8];
-                uint8_t plen = sxReadPayload(buf, 8);
+                // Read ONLY the type byte in the hot path.  Reading the full 8
+                // bytes every packet (plus the per-second raw dump) overran the
+                // dwell and cost FHSS lock; type (low 2 bits of byte 0) is all we
+                // need to isolate the drone's telemetry.
+                sxReadPayload(buf, 1);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
-                // Read RSSI once per packet.  s_reportRssi accumulates the max
-                // of ALL packets (Tier-2 fallback); s_tlmRssiMax accumulates the
-                // max of only the TLM (drone uplink) slots (Tier-1, see below).
+                // Read RSSI once per packet.  s_reportRssi accumulates the max of
+                // ALL packets (Tier-3 fallback); s_tlmRssiMax accumulates only the
+                // TLM (type 0b11 = drone) packets (Tier-1).
                 int8_t rssiNow = sxReadRssiNow();
-
-                // Raw-byte dump sampling: keep the first packet of the second,
-                // plus up to 3 more whose byte0 differs (catches RC/SYNC/TLM so
-                // we can see the real type spread and find the byte0 offset).
-                if (s_dumpN == 0 ||
-                    (s_dumpN < 4 && buf[0] != s_dumpBuf[0][0])) {
-                    memcpy(s_dumpBuf[s_dumpN], buf, 8);
-                    s_dumpRssi[s_dumpN] = rssiNow;
-                    s_dumpLen[s_dumpN]  = plen;
-                    s_dumpN++;
-                }
                 s_rawType[pktType]++;
                 if (rssiNow > s_rawRssiMax)  s_rawRssiMax  = rssiNow;
                 if (rssiNow > s_reportRssi)  s_reportRssi  = rssiNow;
@@ -607,18 +590,17 @@ void loop() {
                 // ELRS 3.6.3: the drone's telemetry uplink is OTA type 0b11
                 // (PACKET_TYPE_TLM).  The TX only ever sends RC=0b00 / MSP=0b01 /
                 // SYNC=0b10, so type 0b11 alone identifies the drone — independent
-                // of TX level or movement.  This is the primary separation now
-                // that the payload is actually read (see sxReadPayload fix).
+                // of TX level or movement.  This is the primary separation.
                 if (pktType == OTA_TYPE_TLM) {
                     if (rssiNow > s_tlmRssiMax) s_tlmRssiMax = rssiNow;
                     s_tlmPktCount++;
                     if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
                 }
 
-                // TX-background notch: histogram every packet (for the mode =
-                // constant TX level) and split packets that deviate from the
-                // current TX level into the drone's near (above) / far (below)
-                // clusters.  Used by Tier 2 below when no SYNC/nonce is available.
+                // TX-background notch (Tier-2 fallback): histogram every packet
+                // (mode = constant TX level) and split packets that deviate from
+                // the current TX level into the drone's near (above) / far (below)
+                // clusters.
                 int idx = -(int)rssiNow;
                 if (idx < 0)   idx = 0;
                 if (idx > 127) idx = 127;
@@ -633,32 +615,12 @@ void loop() {
                     }
                 }
 
-                if (pktType == OTA_TYPE_SYNC) {
-                    // Validate the SYNC against our bound UID before trusting it.
-                    // LoRa CRC is off, so a garbage packet whose low 2 bits happen
-                    // to be 0b10 would otherwise re-anchor the hop grid (hopIndex /
-                    // s_nextHopUs) to random values and break FHSS lock — exactly
-                    // the resync storm seen on hardware.  A real SYNC carries
-                    // UID3/UID4 (bytes 4/5) and UID5's top bits (byte 6).
-                    bool uidOk = buf[OTA_SYNC_UID3_BYTE] == ident.uid[3] &&
-                                 buf[OTA_SYNC_UID4_BYTE] == ident.uid[4] &&
-                                 ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) &
-                                  OTA_SYNC_UID5_HIBITS) == 0;
-                    if (uidOk) {
-                        // SYNC re-anchors the hop grid phase (improves FOLLOW lock).
-                        s_syncCount++;
-                        hopIndex = (uint16_t)buf[OTA_SYNC_FHSS_BYTE];
-                        uint8_t nonce = buf[OTA_SYNC_NONCE_BYTE];
-                        s_nonceBase = nonce - (nonce % FHSS_HOP_INTERVAL);
-                        uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
-                                         & OTA_SYNC_TLMRATIO_MASK;
-                        s_tlmDenom   = TLM_DENOM_LUT[tlmIdx];
-                        s_nonceValid = (s_tlmDenom >= 2);
-                        if (s_nonceValid) s_lastSyncMs = millis();
-                        uint8_t slotsLeft = FHSS_HOP_INTERVAL - (nonce % FHSS_HOP_INTERVAL);
-                        s_nextHopUs = micros() - PKT_AIRTIME_US + (uint32_t)slotsLeft * ELRS_SLOT_US;
-                    }
-                }
+                // Count SYNC packets for the diagnostic only.  We deliberately do
+                // NOT re-anchor the hop grid from SYNC: hardware showed that
+                // overwriting hopIndex / s_nextHopUs (whether from a real or a
+                // CRC-off false SYNC) breaks FHSS lock, while the free-running
+                // absolute-time grid + SCAN re-lock stays solid.
+                if (pktType == OTA_TYPE_SYNC) s_syncCount++;
             }
             // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
             // yield() services the WiFi/ESP-NOW stack and can stall for ~1-2 ms
@@ -743,7 +705,7 @@ void loop() {
         //   pkts   = total packets/s (TX downlink + drone uplink)
         //   sync   = TX SYNC packets/s (intermittent on a linked TX; 0 = no nonce)
         //   rmax   = strongest packet this second
-        //   mode   = TLM (Tier-1 nonce) / RXBG (Tier-2 TX-notch) / ALL (Tier-3)
+        //   mode   = TLM (type-0b11 drone) / RXBG (TX-notch) / ALL (max-of-all)
         //   txBg   = estimated constant TX level (the cluster being suppressed)
         //   rxNear = count@maxRSSI of above-TX (near drone) packets this second
         //   rxFar  = count@maxRSSI of below-TX (far drone) packets this second
@@ -753,24 +715,12 @@ void loop() {
                           (unsigned)s_pktCount, (unsigned)s_syncCount,
                           (int)s_rawRssiMax, (unsigned)lqPct(), mode,
                           (int)s_txBg, s_txBgValid ? "" : "(?)");
-            Serial.printf("[gate_ep1]   rxNear=%u@%d rxFar=%u@%d denom=%u tlm=%u t0=%u t1=%u t2=%u t3=%u\n",
+            Serial.printf("[gate_ep1]   rxNear=%u@%d rxFar=%u@%d tlm/s=%u t0=%u t2=%u t3=%u\n",
                           (unsigned)s_dbgNearCnt, (int)s_dbgNearMax,
                           (unsigned)s_dbgFarCnt,  (int)s_dbgFarMax,
-                          (unsigned)s_tlmDenom, (unsigned)s_tlmPktCount,
-                          (unsigned)s_rawType[0], (unsigned)s_rawType[1],
-                          (unsigned)s_rawType[2], (unsigned)s_rawType[3]);
-            // Raw byte dump: full 8 bytes of a few sampled packets so the true
-            // byte0/type offset can be matched against the ELRS 3.6.3 layout.
-            for (uint8_t d = 0; d < s_dumpN; d++) {
-                Serial.printf("[gate_ep1]   RAW len=%u rssi=%d t=%u: "
-                              "%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                              s_dumpLen[d], (int)s_dumpRssi[d],
-                              s_dumpBuf[d][0] & OTA_TYPE_MASK,
-                              s_dumpBuf[d][0], s_dumpBuf[d][1], s_dumpBuf[d][2],
-                              s_dumpBuf[d][3], s_dumpBuf[d][4], s_dumpBuf[d][5],
-                              s_dumpBuf[d][6], s_dumpBuf[d][7]);
-            }
-            s_dumpN = 0;
+                          (unsigned)s_tlmPktCount,
+                          (unsigned)s_rawType[0], (unsigned)s_rawType[2],
+                          (unsigned)s_rawType[3]);
             s_pktCount   = 0;
             s_tlmPktCount = 0;
             s_syncCount  = 0;
