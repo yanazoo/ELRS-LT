@@ -17,7 +17,7 @@
 
 // Pilot detection
 #define MAX_PILOTS         4
-#define EMA_ALPHA          0.3f
+#define EMA_ALPHA          0.25f  // RSSI smoothing: between 0.3 snappy and 0.2 smooth
 // Default thresholds assume max-RSSI-per-interval reporting from the EP1/EP2
 // sniffer firmware.  TX downlink background is typically -65 to -75 dBm (varies
 // with TX-to-gate distance).  A drone passing at <2m spikes to -35 to -45 dBm.

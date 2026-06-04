@@ -43,25 +43,28 @@ static uint16_t missStreak = 0;
 static uint32_t lastReport = 0;
 static SnifferIdentity_t ident = { {0}, false };
 
-// ---- RSSI tracking for ESP-NOW reporting (hybrid TLM isolation) ----
-// We want the reported RSSI to follow the DRONE's telemetry uplink, not the
-// stationary TX's downlink.  Both use OTA type 0b00 in ELRS 3.x, so they can
-// only be separated by slot timing (nonce % tlmDenom == 0 marks a TLM slot),
-// which a SYNC packet bootstraps.  We run two tiers:
-//   Tier 1 (nonce fresh, i.e. a SYNC within NONCE_FRESH_MS — the calibration /
-//           connecting state): report ONLY the max RSSI of TLM-slot packets, so
-//           the TX downlink never appears on the calibration graph.  Floors when
-//           no telemetry is heard (drone off/far).
-//   Tier 2 (nonce stale, e.g. sustained armed flight with no SYNC): fall back to
-//           the max RSSI of ALL packets — the proven max-per-interval behaviour
-//           the gate_node EnterAt/ExitAt thresholds are tuned for.
-// When no packets are received (scan/resync) both accumulators stay at floor.
-static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max RSSI of TLM (type 0b11) packets this interval
-static uint8_t  s_tlmIntervalCnt = 0;  // TLM packets this report interval (gate against bit-flips)
+// ---- RSSI tracking for ESP-NOW reporting (telemetry isolation) ----
+// In ELRS 3.6.3 the drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM);
+// the TX only sends RC=0b00 / MSP=0b01 / SYNC=0b10.  So type 0b11 alone is the
+// drone, independent of TX level/movement.  We report the latest telemetry RSSI
+// and HOLD it until no telemetry has been heard for an adaptive silence timeout,
+// then drop to the floor.  The timeout scales with the telemetry ratio (read from
+// the SYNC packet): low ratios get a short, responsive timeout; high/sparse ratios
+// (down to 1:128 = a sample every 256 ms) get a longer one so the trace does not
+// flicker to the floor between samples.  A single telemetry packet is enough to
+// refresh the hold (no per-interval minimum).
+static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
+static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
+static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
+static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
+static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold timeout
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
 static uint16_t s_syncCount   = 0;     // SYNC packets since last log
+static uint8_t  s_tlmDenom    = 0;     // telemetry ratio denominator from SYNC (0=unknown)
+// SYNC byte[3] bits[3:1] index -> denominator (1:N).  0=off 1=1:128 .. 7=1:2
+static const uint8_t TLM_DENOM_LUT[8] = { 0, 128, 64, 32, 16, 8, 4, 2 };
 
 // ---- Raw diagnostics (independent of classification) ----
 static uint16_t s_rawType[4]   = {0, 0, 0, 0};
@@ -595,12 +598,32 @@ void loop() {
                     }
                 }
 
-                // Count SYNC packets for the diagnostic only.  We deliberately do
-                // NOT re-anchor the hop grid from SYNC: hardware showed that
-                // overwriting hopIndex / s_nextHopUs (whether from a real or a
-                // CRC-off false SYNC) breaks FHSS lock, while the free-running
-                // absolute-time grid + SCAN re-lock stays solid.
-                if (pktType == OTA_TYPE_SYNC) s_syncCount++;
+                // SYNC: read the telemetry ratio to size the silence timeout.  We
+                // deliberately do NOT re-anchor the hop grid (hopIndex/s_nextHopUs)
+                // — hardware showed that breaks FHSS lock; the free-running grid +
+                // SCAN re-lock is solid.  SYNC is rare (1-5/s) so the extra full-
+                // payload read here does not load the capture loop.
+                if (pktType == OTA_TYPE_SYNC) {
+                    s_syncCount++;
+                    sxReadPayload(buf, 8);   // need bytes 3-6 (ratio + UID)
+                    bool uidOk = buf[OTA_SYNC_UID3_BYTE] == ident.uid[3] &&
+                                 buf[OTA_SYNC_UID4_BYTE] == ident.uid[4] &&
+                                 ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) &
+                                  OTA_SYNC_UID5_HIBITS) == 0;
+                    if (uidOk) {
+                        uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
+                                         & OTA_SYNC_TLMRATIO_MASK;
+                        uint8_t denom = TLM_DENOM_LUT[tlmIdx];
+                        if (denom >= 2) {
+                            s_tlmDenom = denom;
+                            uint32_t to = ((uint32_t)denom * ELRS_SLOT_US / 1000)
+                                          * TLM_SILENCE_MARGIN;
+                            if (to < TLM_SILENCE_MIN_MS) to = TLM_SILENCE_MIN_MS;
+                            if (to > TLM_SILENCE_MAX_MS) to = TLM_SILENCE_MAX_MS;
+                            s_silenceMs = to;
+                        }
+                    }
+                }
             }
             // NOTE: deliberately no yield() inside the dwell.  On the ESP8285
             // yield() services the WiFi/ESP-NOW stack and can stall for ~1-2 ms
@@ -647,13 +670,25 @@ void loop() {
 
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
-        bool tlmSeen = (s_tlmIntervalCnt >= TLM_MIN_PKTS);
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Report the drone telemetry (OTA type 0b11) RSSI when present,
-            // otherwise the floor.  TX RC/SYNC packets are never reported, so the
-            // trace is the drone's signal alone (TX-independent) and the baseline
-            // drops to the floor the moment the drone stops transmitting.
-            int8_t reportRssi = tlmSeen ? s_tlmRssiMax : (int8_t)RSSI_FLOOR_DBM;
+            // Telemetry (type 0b11 = drone) drives the trace.  A single telemetry
+            // packet this interval refreshes the held value and its timestamp; we
+            // then HOLD that value until no telemetry has arrived for s_silenceMs
+            // (which scales with the telemetry ratio), after which we drop to the
+            // floor.  This keeps sparse high-ratio telemetry (up to 1:128) from
+            // flickering to the floor between samples, while still falling cleanly
+            // when the drone truly stops (off / disarmed / out of range).
+            if (s_tlmIntervalCnt >= 1) {
+                s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
+                s_lastTlmMs   = now;
+            }
+            int8_t reportRssi;
+            if (s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
+                reportRssi = s_tlmHoldRssi;     // hold between / during samples
+            } else {
+                reportRssi = (int8_t)RSSI_FLOOR_DBM;
+                s_tlmHoldRssi = (int8_t)RSSI_FLOOR_DBM;
+            }
             espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
             // Roll up 1 Hz diagnostics before clearing the interval accumulators.
             if (s_rxNearMax > s_dbgNearMax) s_dbgNearMax = s_rxNearMax;
@@ -680,12 +715,13 @@ void loop() {
                           (unsigned)s_pktCount, (unsigned)s_syncCount,
                           (int)s_rawRssiMax, (unsigned)lqPct(), mode,
                           (int)s_txBg, s_txBgValid ? "" : "(?)");
-            Serial.printf("[gate_ep1]   rxNear=%u@%d rxFar=%u@%d tlm/s=%u t0=%u t2=%u t3=%u\n",
+            Serial.printf("[gate_ep1]   rxNear=%u@%d rxFar=%u@%d tlm/s=%u t0=%u t2=%u t3=%u ratio=1:%u hold=%ums\n",
                           (unsigned)s_dbgNearCnt, (int)s_dbgNearMax,
                           (unsigned)s_dbgFarCnt,  (int)s_dbgFarMax,
                           (unsigned)s_tlmPktCount,
                           (unsigned)s_rawType[0], (unsigned)s_rawType[2],
-                          (unsigned)s_rawType[3]);
+                          (unsigned)s_rawType[3],
+                          (unsigned)s_tlmDenom, (unsigned)s_silenceMs);
             s_pktCount   = 0;
             s_tlmPktCount = 0;
             s_syncCount  = 0;
