@@ -37,6 +37,11 @@ static const uint8_t BCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static uint8_t s_gateMac[6]    = {};
 static bool    s_gateMacKnown  = false;
 
+// Beacons are normally unicast to the Gate once its MAC is known (so other EP1s
+// drop them in hardware), but every BEACON_BCAST_EVERY-th beacon is broadcast
+// so the Gate — or a replacement Gate — can always (re)discover this EP1.
+#define BEACON_BCAST_EVERY 6
+
 static ProvisionCallback_t s_provisionCb = nullptr;
 
 void espnowSetProvisionCallback(ProvisionCallback_t cb) {
@@ -147,7 +152,21 @@ void espnowSendBeacon(const uint8_t uid[6], bool uidValid, uint8_t state) {
     pkt.state = state;
     if (uidValid) memcpy(pkt.uid, uid, 6);
     else          memset(pkt.uid, 0, 6);
-    int rc = esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
-    Serial.printf("[espnow] beacon tx state=%u ch=%u rc=%d\n",
-                  (unsigned)state, (unsigned)wifi_get_channel(), rc);
+
+    // Unicast to the Gate when known (keeps beacons off the other EP1s' MAC
+    // filters); periodically broadcast for (re)discovery; always broadcast
+    // before the first provision, when the Gate MAC is not yet learned.
+    static uint8_t beaconSeq = 0;
+    bool bcast = !s_gateMacKnown || (beaconSeq++ % BEACON_BCAST_EVERY) == 0;
+    const u8 *dst;
+    if (bcast) {
+        dst = (const u8*)BCAST_MAC;
+    } else {
+        ensureGatePeer();
+        dst = (const u8*)s_gateMac;
+    }
+    int rc = esp_now_send((u8*)dst, (u8*)&pkt, sizeof(pkt));
+    Serial.printf("[espnow] beacon tx state=%u ch=%u %s rc=%d\n",
+                  (unsigned)state, (unsigned)wifi_get_channel(),
+                  bcast ? "bcast" : "uni", rc);
 }
