@@ -1,20 +1,15 @@
 // espnow_tx.cpp - ESP-NOW sender/receiver for EP1 sniffer (ESP8266 core API).
 //
 // Wire protocol:
-//   EP1 -> Gate:
-//     - GateEP1BeaconPacket_t (8B, magic=0xA5) broadcast every BEACON_INTERVAL_MS
-//       (broadcast so the Gate can discover this EP1's MAC; low rate).
-//     - GateEP1Packet_t       (12B) every RSSI_REPORT_MS while in FOLLOW —
-//       UNICAST to the Gate once its MAC is learned (broadcast fallback before
-//       the first provision).  This is the 20 Hz hot path; keeping it unicast
-//       stops other EP1s on the same channel from being interrupted by it.
+//   EP1 -> Gate (broadcast FF:FF:FF:FF:FF:FF):
+//     - GateEP1BeaconPacket_t (8B, magic=0xA5) every BEACON_INTERVAL_MS
+//     - GateEP1Packet_t       (12B)             every RSSI_REPORT_MS while in FOLLOW
 //   Gate -> EP1 (unicast, EP1 MAC learned by Gate from beacon src_addr):
-//     - GateProvisionPacket_t (7B, magic=0xB1) when user assigns UID.
-//       EP1 learns the Gate MAC from this packet's src_addr.
+//     - GateProvisionPacket_t (7B, magic=0xB1) when user assigns UID
 //
-// The Gate's recv callback is invoked for broadcast frames and for unicast
-// frames addressed to it, so both paths reach the Gate on the configured
-// channel; no Gate MAC needs to be hard-coded or kept in secrets.h.
+// Broadcasting outgoing traffic means no Gate MAC needs to be hard-coded
+// or kept in secrets.h. The Gate's recv callback is invoked for any packet
+// on the configured channel.
 
 #include "espnow_tx.h"
 #include <ESP8266WiFi.h>
@@ -26,16 +21,6 @@ extern "C" {
 }
 
 static const uint8_t BCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-
-// Gate Node MAC, learned from the src_addr of the first provision packet.
-// Once known, the high-rate (20 Hz) RSSI reports are sent UNICAST to the Gate
-// instead of broadcast.  This is critical with >1 EP1 on the same channel:
-// broadcast RSSI frames are accepted by every EP1's hardware MAC filter and
-// fire a WiFi RX interrupt (~1-2 ms WiFi-stack stall each) that disrupts the
-// SX1280 capture dwell and breaks FHSS lock.  A unicast frame addressed to the
-// Gate is dropped in hardware by the other EP1s, so they no longer interfere.
-static uint8_t s_gateMac[6]    = {};
-static bool    s_gateMacKnown  = false;
 
 static ProvisionCallback_t s_provisionCb = nullptr;
 
@@ -54,13 +39,6 @@ static void onRecv(u8 *srcMac, u8 *data, u8 len) {
     Serial.printf("[espnow] provision from %02X:%02X:%02X:%02X:%02X:%02X\n",
                   srcMac[0], srcMac[1], srcMac[2], srcMac[3], srcMac[4], srcMac[5]);
 
-    // Learn the Gate's MAC so RSSI reports can be unicast (see s_gateMac note).
-    // Peer registration is deferred to the send path (main-loop context) — the
-    // ESP-NOW recv callback runs in WiFi-task context where esp_now_add_peer()
-    // is best avoided.
-    memcpy(s_gateMac, srcMac, 6);
-    s_gateMacKnown = true;
-
     if (s_provisionCb) s_provisionCb(pkt.uid);
 }
 
@@ -74,15 +52,6 @@ static void ensureChannelAndPeer() {
     }
     if (!esp_now_is_peer_exist((u8*)BCAST_MAC)) {
         esp_now_add_peer((u8*)BCAST_MAC, ESP_NOW_ROLE_COMBO, ESPNOW_CHANNEL, NULL, 0);
-    }
-}
-
-// Ensure the Gate Node is registered as a unicast peer. Called from the send
-// path (main-loop context) once the Gate MAC has been learned from a provision.
-static void ensureGatePeer() {
-    if (!s_gateMacKnown) return;
-    if (!esp_now_is_peer_exist(s_gateMac)) {
-        esp_now_add_peer(s_gateMac, ESP_NOW_ROLE_COMBO, ESPNOW_CHANNEL, NULL, 0);
     }
 }
 
@@ -125,17 +94,7 @@ void espnowSendRssi(const uint8_t uid[6], int8_t rssi, uint8_t lq, uint32_t ts) 
     pkt.rssi = rssi;
     pkt.lq   = lq;
     pkt.ts   = ts;
-    // Unicast to the Gate once its MAC is known: this is the 20 Hz hot path, and
-    // keeping it off the broadcast address is what prevents other EP1s on the
-    // same channel from being interrupted by it (their MAC filter drops it).
-    // Fall back to broadcast before the first provision (e.g. auto-discovery /
-    // UART bring-up), where there is no Gate MAC to target yet.
-    if (s_gateMacKnown) {
-        ensureGatePeer();
-        esp_now_send(s_gateMac, (u8*)&pkt, sizeof(pkt));
-    } else {
-        esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
-    }
+    esp_now_send((u8*)BCAST_MAC, (u8*)&pkt, sizeof(pkt));
 }
 
 // Sends a presence beacon so Gate Node can discover this EP1's MAC and
