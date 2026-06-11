@@ -55,9 +55,7 @@ static SnifferIdentity_t ident = { {0}, false };
 // refresh the hold (no per-interval minimum).
 static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
 static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
-static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold (diag/log only)
-static int8_t   s_nearHoldRssi = RSSI_FLOOR_DBM; // held near-cluster peak (lap signal)
-static uint32_t s_lastNearMs   = 0;    // last report interval with a near-cluster peak
+static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // diag/log only
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
@@ -675,22 +673,15 @@ void loop() {
             // cluster: packets on this drone's FHSS sequence whose RSSI rose
             // above the constant TX downlink background as the drone approached
             // the gate.  This is dense (tens of packets per interval at the
-            // gate) so the trace is smooth, and it is 0/floor when the drone is
-            // away (rxNear=0), giving a clean enter/exit for lap detection.
+            // gate) so the trace is smooth on its own — no hold/silence timer
+            // (those proved unreliable in the field).  When the drone is away
+            // (rxNear < min) we report the floor immediately, giving a clean
+            // enter/exit for lap detection.
             int8_t reportRssi;
             if (s_txBgValid && s_rxNearCnt >= TXBG_RX_MIN_PKTS) {
-                s_nearHoldRssi = s_rxNearMax;   // newest drone-pass peak
-                s_lastNearMs   = now;
-                reportRssi     = s_rxNearMax;
-            } else if (s_lastNearMs != 0 && (now - s_lastNearMs) < NEAR_HOLD_MS) {
-                reportRssi = s_nearHoldRssi;    // bridge brief sampling gaps
+                reportRssi = s_rxNearMax;       // this interval's drone-pass peak
             } else {
-                // Drone away (no packets above background): clean floor so the
-                // exit threshold fires.  No telemetry fallback — a stray far
-                // telemetry sample could sit above a tight enter threshold and
-                // false-trigger a lap.
-                reportRssi     = (int8_t)RSSI_FLOOR_DBM;
-                s_nearHoldRssi = (int8_t)RSSI_FLOOR_DBM;
+                reportRssi = (int8_t)RSSI_FLOOR_DBM;
             }
             espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
             // Roll up 1 Hz diagnostics before clearing the interval accumulators.
