@@ -458,10 +458,41 @@ void setup() {
 #endif
 }
 
+// ---- SX1280 hang recovery ----
+// The radio can latch BUSY HIGH and stop responding (pkts drop to 0, "[sx] BUSY
+// stuck >50ms" repeats forever). sxRecover() hardware-resets it; if recovery
+// keeps failing the chip is dead and only a full MCU reboot clears it.
+#define SX_MAX_RECOVER 30      // consecutive recoveries with no re-lock -> reboot
+static uint16_t s_sxRecoverCount = 0;
+
 void loop() {
     applyProvision();       // handle ESP-NOW provision before state machine
     maybeSendBeacon();      // 5 s presence beacon
     updateLedHeartbeat();   // non-blocking state indicator
+
+    // Radio hung? Hardware-reset it and re-acquire. Escalate to a full reboot if
+    // recovery never sticks (s_sxRecoverCount is cleared on the next re-lock).
+    if (sxNeedsRecovery()) {
+        sxRecover();
+        if (++s_sxRecoverCount >= SX_MAX_RECOVER) {
+            Serial.println(F("[gate_ep1] SX1280 unrecoverable -> reboot"));
+            ESP.restart();
+        }
+        missStreak = 0;
+        s_nextHopUs = 0;
+        s_lqHead = 0; s_lqSum = 0; memset(s_lqBuf, 0, sizeof(s_lqBuf));
+        if (ident.valid) {
+            state = ST_SCAN;
+            Serial.println(F("[gate_ep1] SX1280 recovered -> SCAN"));
+        } else {
+            state = ST_PROVISION;
+#ifndef BRINGUP_UID
+            autoReset();
+#endif
+            Serial.println(F("[gate_ep1] SX1280 recovered -> PROVISION"));
+        }
+        return;
+    }
 
     switch (state) {
 
@@ -515,6 +546,7 @@ void loop() {
         if (scanGot) {
             // Stay on the channel we just caught — FOLLOW resumes tracking here.
             missStreak = 0;
+            s_sxRecoverCount = 0;   // chip is receiving again: clear recovery escalation
             state = ST_FOLLOW;
             Serial.print(F("[gate_ep1] locked hop="));
             Serial.print(hopIndex);

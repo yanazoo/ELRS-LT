@@ -26,3 +26,11 @@ bool sxPacketReceived();
 // Read the payload of the last received packet into buf (up to maxLen bytes).
 // Returns the number of bytes actually copied.  Call after sxPacketReceived().
 uint8_t sxReadPayload(uint8_t *buf, uint8_t maxLen);
+
+// True when the SX1280 has been unresponsive (BUSY stuck HIGH) for long enough
+// that it has hung and needs a hardware-reset recovery. Poll from the main loop.
+bool sxNeedsRecovery();
+
+// Hardware-reset the SX1280 and re-apply the LoRa configuration. Call when
+// sxNeedsRecovery() returns true, then re-enter SCAN to re-acquire the link.
+void sxRecover();
