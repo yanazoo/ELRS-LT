@@ -15,6 +15,9 @@ void setup() {
     Serial.println("\n[Gate] ELRS Backpack Lap Timer — Gate Node");
 
     Serial1.setRxBufferSize(2048);
+    // TX buffer sized for one full 4-pilot RSSI burst (~500B) plus laps/beacons,
+    // so serializeJson() never blocks the loop waiting on the UART FIFO.
+    Serial1.setTxBufferSize(2048);
     Serial1.begin(UART_BAUD, SERIAL_8N1, WEB_NODE_RX_PIN, WEB_NODE_TX_PIN);
 
     initPilots();
@@ -51,6 +54,8 @@ void loop() {
             else webCmdLen = 0;
         }
     }
+
+    drainBeaconEvents();   // ep1_hello JSON emitted here, in loop context only
 
     GateEP1Packet_t pkt;
     while (xQueueReceive(packetQueue, &pkt, 0) == pdTRUE) {

@@ -6,6 +6,7 @@
 #include "config.h"
 
 QueueHandle_t packetQueue;
+static QueueHandle_t beaconQueue;
 
 static void fmtMac(const uint8_t m[6], char out[18]) {
     snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -29,21 +30,15 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
         const GateEP1BeaconPacket_t *b = (const GateEP1BeaconPacket_t *)data;
         if (b->magic != EP1_BEACON_MAGIC) return;
 
-        char macStr[18], uidStr[18] = "";
-        fmtMac(srcMac, macStr);
-
-        bool hasUid = false;
-        for (int i = 0; i < 6; i++) if (b->uid[i]) { hasUid = true; break; }
-        if (hasUid) fmtMac(b->uid, uidStr);
-
-        Serial.printf("[Gate] beacon from %s state=%u uid=%s\n",
-                      macStr, (unsigned)b->state, uidStr[0] ? uidStr : "(none)");
-
-        char json[120];
-        snprintf(json, sizeof(json),
-                 R"({"type":"ep1_hello","mac":"%s","state":%u,"uid":"%s"})",
-                 macStr, (unsigned)b->state, uidStr);
-        Serial1.println(json);
+        // Queue for the main loop — no UART writes from WiFi-task context
+        // (see BeaconEvent_t note in promiscuous.h).
+        BeaconEvent_t evt;
+        memcpy(evt.mac, srcMac, 6);
+        evt.state = b->state;
+        memcpy(evt.uid, b->uid, 6);
+        BaseType_t woken = pdFALSE;
+        xQueueSendFromISR(beaconQueue, &evt, &woken);
+        if (woken) portYIELD_FROM_ISR();
 
     } else {
         // Unknown packet size — log so we can see if EP1 is reaching us at all
@@ -52,8 +47,30 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
     }
 }
 
+void drainBeaconEvents() {
+    BeaconEvent_t evt;
+    while (xQueueReceive(beaconQueue, &evt, 0) == pdTRUE) {
+        char macStr[18], uidStr[18] = "";
+        fmtMac(evt.mac, macStr);
+
+        bool hasUid = false;
+        for (int i = 0; i < 6; i++) if (evt.uid[i]) { hasUid = true; break; }
+        if (hasUid) fmtMac(evt.uid, uidStr);
+
+        Serial.printf("[Gate] beacon from %s state=%u uid=%s\n",
+                      macStr, (unsigned)evt.state, uidStr[0] ? uidStr : "(none)");
+
+        char json[120];
+        snprintf(json, sizeof(json),
+                 R"({"type":"ep1_hello","mac":"%s","state":%u,"uid":"%s"})",
+                 macStr, (unsigned)evt.state, uidStr);
+        Serial1.println(json);
+    }
+}
+
 void setupEspNowGate() {
     packetQueue = xQueueCreate(64, sizeof(GateEP1Packet_t));
+    beaconQueue = xQueueCreate(16, sizeof(BeaconEvent_t));
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);

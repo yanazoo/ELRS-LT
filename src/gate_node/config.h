@@ -4,7 +4,10 @@
 #define WEB_NODE_TX_PIN   26
 #define WEB_NODE_RX_PIN   25
 #define DEBUG_BAUD        115200
-#define UART_BAUD         115200
+// Gate <-> Web link. 4 pilots x 20 Hz RSSI JSON (~116B/line) is ~9.3 KB/s,
+// which saturates 115200 baud (~80% sustained, bursts overflow). 230400 keeps
+// utilization ~40%. MUST match GATE_BAUD in src/web_node/config.h — flash both.
+#define UART_BAUD         230400
 
 // SD SPI Pins — LilyGo TTGO T8 V1.8
 #define SD_CS_PIN    13
