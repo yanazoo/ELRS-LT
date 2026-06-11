@@ -78,6 +78,18 @@
 #define TXBG_MIN_PKTS        40     // min packets in a window to trust the txBg estimate
 #define TXBG_RX_MIN_PKTS      2     // min RX packets per report interval (rejects 1-pkt noise)
 
+// ---- Lap-timing RSSI source: TX-background NEAR cluster ----
+// The reported lap-timing RSSI is the per-interval peak of the packets that rise
+// ABOVE the constant TX downlink background (the "near" cluster of the txBg notch)
+// on this drone's FHSS sequence.  This signal is DENSE (tens of packets per 50 ms
+// interval as the drone nears the gate) and tracks the pass cleanly.
+// It replaces telemetry-type-only reporting, which ELRS emits too sparsely — and
+// some OTA versions misclassify — to drive a smooth peak (observed: rxNear≈99/s
+// at the gate while tlm/s stayed 0-3, so the telemetry trace flickered to floor).
+// NEAR_HOLD_MS briefly bridges sampling gaps so the trace does not chatter; keep
+// it short so the exit threshold still fires promptly after the drone leaves.
+#define NEAR_HOLD_MS         150    // hold last near-peak this long before flooring
+
 // ---- Telemetry (drone) isolation by OTA type (ELRS 3.6.3) ----
 // In ELRS 3.6.3 the drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM);
 // the TX only sends RC=0b00 / MSP=0b01 / SYNC=0b10.  So type 0b11 identifies the
