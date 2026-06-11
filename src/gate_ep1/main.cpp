@@ -55,7 +55,9 @@ static SnifferIdentity_t ident = { {0}, false };
 // refresh the hold (no per-interval minimum).
 static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
 static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
-static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // diag/log only
+static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
+static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
+static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold timeout
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
@@ -669,19 +671,23 @@ void loop() {
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Lap-timing RSSI = the per-interval PEAK of the txBg-notch NEAR
-            // cluster: packets on this drone's FHSS sequence whose RSSI rose
-            // above the constant TX downlink background as the drone approached
-            // the gate.  This is dense (tens of packets per interval at the
-            // gate) so the trace is smooth on its own — no hold/silence timer
-            // (those proved unreliable in the field).  When the drone is away
-            // (rxNear < min) we report the floor immediately, giving a clean
-            // enter/exit for lap detection.
+            // Telemetry (type 0b11 = drone) drives the trace.  A single telemetry
+            // packet this interval refreshes the held value and its timestamp; we
+            // then HOLD that value until no telemetry has arrived for s_silenceMs
+            // (which scales with the telemetry ratio), after which we drop to the
+            // floor.  This keeps sparse high-ratio telemetry (up to 1:128) from
+            // flickering to the floor between samples, while still falling cleanly
+            // when the drone truly stops (off / disarmed / out of range).
+            if (s_tlmIntervalCnt >= 1) {
+                s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
+                s_lastTlmMs   = now;
+            }
             int8_t reportRssi;
-            if (s_txBgValid && s_rxNearCnt >= TXBG_RX_MIN_PKTS) {
-                reportRssi = s_rxNearMax;       // this interval's drone-pass peak
+            if (s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
+                reportRssi = s_tlmHoldRssi;     // hold between / during samples
             } else {
                 reportRssi = (int8_t)RSSI_FLOOR_DBM;
+                s_tlmHoldRssi = (int8_t)RSSI_FLOOR_DBM;
             }
             espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
             // Roll up 1 Hz diagnostics before clearing the interval accumulators.
