@@ -124,6 +124,15 @@
 // high telemetry ratio on the TX (1:2…1:8 @ 500Hz = 4…16 ms between samples).
 // TLM_SILENCE_MS (300) is > the 1:128 interval (256 ms) so it never false-floors.
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
+
+// ---- Envelope follower (smooth trace from sparse telemetry) ----
+// Sparse telemetry (t3 ~0-2/s on a marginal link) makes the raw trace a
+// sawtooth. The reporter rises instantly to each telemetry sample and decays by
+// ENV_DECAY_DB per 50 ms report interval between samples, so the trace is a
+// smooth curve instead of spiking to the floor each gap. Smaller = smoother but
+// slower to fall when the drone leaves (lap-exit lag); larger = snappier but
+// choppier. ~2 dB/interval reaches the floor in ~1.9 s.
+#define ENV_DECAY_DB          2
 #define TLM_SILENCE_MS       300    // no TLM for this long -> report floor
 
 // ---- UID gate (multi-node: ignore other pilots' drones) ----

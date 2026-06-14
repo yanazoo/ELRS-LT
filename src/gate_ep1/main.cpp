@@ -55,9 +55,8 @@ static SnifferIdentity_t ident = { {0}, false };
 // refresh the hold (no per-interval minimum).
 static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
 static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
-static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
-static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
-static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold timeout
+static int8_t   s_envRssi     = RSSI_FLOOR_DBM;  // envelope-follower output (reported value)
+static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // diag/log only (telemetry ratio)
 // UID gate: time (millis) of the last SYNC packet whose UID matched OURS.
 // We only report RSSI while this is fresh, so a node whose assigned drone is
 // powered off (or that briefly catches a DIFFERENT drone's packets) stays at the
@@ -719,32 +718,26 @@ void loop() {
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Telemetry (type 0b11 = drone) drives the trace.  A single telemetry
-            // packet this interval refreshes the held value and its timestamp; we
-            // then HOLD that value until no telemetry has arrived for s_silenceMs
-            // (which scales with the telemetry ratio), after which we drop to the
-            // floor.  This keeps sparse high-ratio telemetry (up to 1:128) from
-            // flickering to the floor between samples, while still falling cleanly
-            // when the drone truly stops (off / disarmed / out of range).
-            if (s_tlmIntervalCnt >= 1) {
-                s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
-                s_lastTlmMs   = now;
-            }
-            // UID gate: only report while a SYNC from OUR drone is recent. A node
-            // whose drone is off (or that strays onto another drone) never sees
-            // its own UID SYNC, so it stays at the floor instead of showing the
-            // wrong drone as noise. The window is generous so the correct node is
-            // never suppressed during normal SYNC gaps.
+            // Envelope follower: telemetry arrives sparsely (t3 ~0-2/s when the
+            // link is marginal), so reporting the raw telemetry-or-floor makes a
+            // sawtooth. Instead RISE instantly to each new telemetry level and
+            // DECAY slowly between samples (ENV_DECAY_DB per 50 ms interval), so
+            // the trace is a smooth curve that tracks the drone and only reaches
+            // the floor after the telemetry truly stops. UID gate still applies:
+            // an unconfirmed node decays to the floor and stays there.
             bool uidConfirmed = (s_lastUidSyncMs != 0) &&
                                 (now - s_lastUidSyncMs) < UID_GATE_MS;
-            int8_t reportRssi;
-            if (uidConfirmed && s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
-                reportRssi = s_tlmHoldRssi;     // hold between / during samples
+            int8_t tlmVal = (uidConfirmed && s_tlmIntervalCnt >= 1)
+                              ? s_tlmRssiMax : (int8_t)RSSI_FLOOR_DBM;
+            if (tlmVal > s_envRssi) {
+                s_envRssi = tlmVal;                       // rise instantly to telemetry
             } else {
-                reportRssi = (int8_t)RSSI_FLOOR_DBM;
-                s_tlmHoldRssi = (int8_t)RSSI_FLOOR_DBM;
+                int16_t d = (int16_t)s_envRssi - ENV_DECAY_DB;   // decay slowly
+                if (d < tlmVal)          d = tlmVal;      // don't undershoot live telemetry
+                if (d < RSSI_FLOOR_DBM)  d = RSSI_FLOOR_DBM;
+                s_envRssi = (int8_t)d;
             }
-            espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
+            espnowSendRssi(ident.uid, s_envRssi, lqPct(), now);
             // Roll up 1 Hz diagnostics before clearing the interval accumulators.
             if (s_rxNearMax > s_dbgNearMax) s_dbgNearMax = s_rxNearMax;
             if (s_rxFarMax  > s_dbgFarMax)  s_dbgFarMax  = s_rxFarMax;
