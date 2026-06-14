@@ -53,7 +53,7 @@ static SnifferIdentity_t ident = { {0}, false };
 // (down to 1:128 = a sample every 256 ms) get a longer one so the trace does not
 // flicker to the floor between samples.  A single telemetry packet is enough to
 // refresh the hold (no per-interval minimum).
-static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
+static int32_t  s_tlmRssiSum  = 0;     // sum of telemetry RSSI this interval (for averaging)
 static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
 static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
 static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
@@ -621,7 +621,7 @@ void loop() {
                 // fed is no longer used (reporting is telemetry-only).
                 if (pktType == OTA_TYPE_TLM) {
                     int8_t rssiNow = sxReadRssiNow();
-                    if (rssiNow > s_tlmRssiMax) s_tlmRssiMax = rssiNow;
+                    s_tlmRssiSum += rssiNow;            // accumulate for interval average
                     if (rssiNow > s_rawRssiMax) s_rawRssiMax = rssiNow;
                     s_tlmPktCount++;
                     if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
@@ -711,7 +711,12 @@ void loop() {
             // flickering to the floor between samples, while still falling cleanly
             // when the drone truly stops (off / disarmed / out of range).
             if (s_tlmIntervalCnt >= 1) {
-                s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
+                // Average the telemetry RSSI over the interval. Each telemetry
+                // packet lands on a different FHSS channel, so per-packet RSSI
+                // swings several dB; averaging gives a steady level at a fixed
+                // distance (reporting the max picked the strongest channel and
+                // wobbled ~7 dB).
+                s_tlmHoldRssi = (int8_t)(s_tlmRssiSum / (int32_t)s_tlmIntervalCnt);
                 s_lastTlmMs   = now;
             }
             // UID gate: only report while a SYNC from OUR drone is recent. A node
@@ -734,7 +739,7 @@ void loop() {
             if (s_rxFarMax  > s_dbgFarMax)  s_dbgFarMax  = s_rxFarMax;
             s_dbgNearCnt += s_rxNearCnt;
             s_dbgFarCnt  += s_rxFarCnt;
-            s_tlmRssiMax = (int8_t)RSSI_FLOOR_DBM; s_tlmIntervalCnt = 0;
+            s_tlmRssiSum = 0; s_tlmIntervalCnt = 0;
             s_rxNearMax  = (int8_t)RSSI_FLOOR_DBM; s_rxNearCnt = 0;
             s_rxFarMax   = (int8_t)RSSI_FLOOR_DBM; s_rxFarCnt  = 0;
             lastReport = now;
