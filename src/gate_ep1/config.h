@@ -42,6 +42,18 @@
 // packet's reception to its slot boundary when re-anchoring the hop grid phase.
 #define PKT_AIRTIME_US       1100
 
+// ---- SYNC-nonce slot-phase alignment (experimental) ----
+// The TX SYNC packet carries fhssIndex (sequence position) + nonce (slot
+// counter). On each own-UID SYNC we re-anchor the hop grid to the TX: fix any
+// sequence-index drift (a channel repeats ~3x in the 240-long sequence, so the
+// gate can sit on the right channel but the wrong index and then hop wrong) and
+// re-phase s_nextHopUs so the dwell boundary aligns with the TX. The goal is
+// consistent telemetry-slot capture (steadier t3) and faster lock.
+// An earlier attempt at this broke FHSS lock; this one keeps the gate on the
+// channel it is already on (no immediate retune), clamps the phase, and relies
+// on MISS_STREAK_RESYNC as a safety net. Set to 0 to disable instantly.
+#define SYNC_PHASE_ALIGN     1
+
 // ---- Lock-on tuning ----
 // SCAN dwell must exceed one packet interval (500Hz = 2000us) so a parked
 // channel reliably catches a packet while the TX is transmitting on it.

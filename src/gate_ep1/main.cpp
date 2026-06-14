@@ -643,6 +643,22 @@ void loop() {
                         // Confirmed we are tracking OUR drone (SYNC carries
                         // UID[3],UID[4],UID[5]hi). Stamps the UID gate.
                         s_lastUidSyncMs = millis();
+#if SYNC_PHASE_ALIGN
+                        // Re-anchor the hop grid to the TX. We received this SYNC
+                        // on the TX's current channel, so our sequence index must
+                        // be syncFhss (fix any wrong-occurrence index drift), and
+                        // the dwell ends (HOP_INTERVAL - slot) slots from the start
+                        // of this SYNC's slot. We do NOT retune now (we are already
+                        // on the right channel); only the index for the NEXT hop
+                        // and the phase are corrected.
+                        uint8_t syncFhss = buf[OTA_SYNC_FHSS_BYTE];
+                        uint8_t slot     = buf[OTA_SYNC_NONCE_BYTE] % FHSS_HOP_INTERVAL;
+                        hopIndex = (uint16_t)(syncFhss % FHSS_SEQUENCE_LEN);
+                        int32_t toNext = (int32_t)(FHSS_HOP_INTERVAL - slot) * ELRS_SLOT_US
+                                         - PKT_AIRTIME_US;
+                        if (toNext < 0) toNext = 0;
+                        s_nextHopUs = micros() + (uint32_t)toNext;
+#endif
                         uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
                                          & OTA_SYNC_TLMRATIO_MASK;
                         uint8_t denom = TLM_DENOM_LUT[tlmIdx];
