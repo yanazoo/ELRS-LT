@@ -58,6 +58,12 @@ static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
 static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
 static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
 static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold timeout
+// UID gate: time (millis) of the last SYNC packet whose UID matched OURS.
+// We only report RSSI while this is fresh, so a node whose assigned drone is
+// powered off (or that briefly catches a DIFFERENT drone's packets) stays at the
+// floor instead of polluting its slot with the wrong drone's signal. 0 = never
+// confirmed since the last (re)provision.
+static uint32_t s_lastUidSyncMs = 0;
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
@@ -323,6 +329,7 @@ static void applyProvision() {
         hopIndex = 0; missStreak = 0;
         s_lqHead = 0; s_lqSum = 0;
         memset(s_lqBuf, 0, sizeof(s_lqBuf));
+        s_lastUidSyncMs = 0;   // new UID: require a fresh own-drone SYNC to report
         state = ST_SCAN;
         Serial.println(F("[gate_ep1] -> SCAN"));
     } else {
@@ -504,6 +511,7 @@ void loop() {
             s_lqHead   = 0;
             s_lqSum    = 0;
             memset(s_lqBuf, 0, sizeof(s_lqBuf));
+            s_lastUidSyncMs = 0;   // require a fresh own-drone SYNC before reporting
             state = ST_SCAN;
             Serial.println(F("[gate_ep1] -> SCAN"));
 #ifndef BRINGUP_UID
@@ -523,6 +531,7 @@ void loop() {
                 s_lqHead   = 0;
                 s_lqSum    = 0;
                 memset(s_lqBuf, 0, sizeof(s_lqBuf));
+                s_lastUidSyncMs = 0;   // require a fresh own-drone SYNC before reporting
                 state = ST_SCAN;
                 Serial.println(F("[gate_ep1] auto-discover -> SCAN"));
                 autoReset();
@@ -643,6 +652,9 @@ void loop() {
                                  ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) &
                                   OTA_SYNC_UID5_HIBITS) == 0;
                     if (uidOk) {
+                        // Confirmed we are tracking OUR drone (SYNC carries
+                        // UID[3],UID[4],UID[5]hi). Stamps the UID gate.
+                        s_lastUidSyncMs = millis();
                         uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
                                          & OTA_SYNC_TLMRATIO_MASK;
                         uint8_t denom = TLM_DENOM_LUT[tlmIdx];
@@ -714,8 +726,15 @@ void loop() {
                 s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
                 s_lastTlmMs   = now;
             }
+            // UID gate: only report while a SYNC from OUR drone is recent. A node
+            // whose drone is off (or that strays onto another drone) never sees
+            // its own UID SYNC, so it stays at the floor instead of showing the
+            // wrong drone as noise. The window is generous so the correct node is
+            // never suppressed during normal SYNC gaps.
+            bool uidConfirmed = (s_lastUidSyncMs != 0) &&
+                                (now - s_lastUidSyncMs) < UID_GATE_MS;
             int8_t reportRssi;
-            if (s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
+            if (uidConfirmed && s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
                 reportRssi = s_tlmHoldRssi;     // hold between / during samples
             } else {
                 reportRssi = (int8_t)RSSI_FLOOR_DBM;

@@ -114,6 +114,18 @@
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
 #define TLM_SILENCE_MS       300    // no TLM for this long -> report floor
 
+// ---- UID gate (multi-node: ignore other pilots' drones) ----
+// Each sniffer follows ONE pilot's UID. With several sniffers but only some
+// drones powered on, a sniffer whose drone is OFF cannot lock its own link and
+// instead briefly catches OTHER drones' packets, polluting its slot with noise.
+// The drone's TX sends SYNC packets carrying the bound UID; we report RSSI only
+// while a SYNC matching OUR UID has been seen within this window. A sniffer whose
+// TX is off never matches -> stays at the floor. The window is long (the TX emits
+// SYNC continuously regardless of drone position) so the correct sniffer is never
+// suppressed; telemetry silence still floors the trace promptly when the drone
+// leaves, so a long gate window adds no lag to lap detection.
+#define UID_GATE_MS        10000    // report only if own-UID SYNC seen this recently
+
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
 // Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
