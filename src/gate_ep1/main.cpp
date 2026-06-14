@@ -604,39 +604,27 @@ void loop() {
                 sxReadPayload(buf, 1);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
-                // Read RSSI once per packet.  s_tlmRssiMax accumulates only the
-                // TLM (type 0b11 = drone) packets, which is what we report.
-                int8_t rssiNow = sxReadRssiNow();
                 s_rawType[pktType]++;
-                if (rssiNow > s_rawRssiMax)  s_rawRssiMax  = rssiNow;
                 s_pktCount++;
 
                 // ELRS 3.6.3: the drone's telemetry uplink is OTA type 0b11
-                // (PACKET_TYPE_TLM).  The TX only ever sends RC=0b00 / MSP=0b01 /
-                // SYNC=0b10, so type 0b11 alone identifies the drone — independent
-                // of TX level or movement.  This is the primary separation.
+                // (PACKET_TYPE_TLM); the TX only sends RC=0b00 / MSP=0b01 /
+                // SYNC=0b10, so type 0b11 alone identifies the drone.
+                //
+                // RSSI is read ONLY for telemetry packets. Reading GetPacketStatus
+                // (a 6-byte SPI transfer) for EVERY packet -- added earlier for the
+                // TX-background histogram -- stretched per-packet handling toward a
+                // full slot, so the loop phase-locked onto the downlink and starved
+                // the telemetry slots (t0 caught ~250/s but t3 collapsed to ~1-6/s
+                // at ratio 1:8, where ~62/s is expected). Reading RSSI lazily here
+                // restores dense telemetry capture. The histogram / near cluster it
+                // fed is no longer used (reporting is telemetry-only).
                 if (pktType == OTA_TYPE_TLM) {
+                    int8_t rssiNow = sxReadRssiNow();
                     if (rssiNow > s_tlmRssiMax) s_tlmRssiMax = rssiNow;
+                    if (rssiNow > s_rawRssiMax) s_rawRssiMax = rssiNow;
                     s_tlmPktCount++;
                     if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
-                }
-
-                // TX-background notch (Tier-2 fallback): histogram every packet
-                // (mode = constant TX level) and split packets that deviate from
-                // the current TX level into the drone's near (above) / far (below)
-                // clusters.
-                int idx = -(int)rssiNow;
-                if (idx < 0)   idx = 0;
-                if (idx > 127) idx = 127;
-                s_rssiHist[idx]++;
-                if (s_txBgValid) {
-                    if (rssiNow > (int)s_txBg + TXBG_GUARD_DB) {
-                        if (rssiNow > s_rxNearMax) s_rxNearMax = rssiNow;
-                        if (s_rxNearCnt < 255) s_rxNearCnt++;
-                    } else if (rssiNow < (int)s_txBg - TXBG_GUARD_DB) {
-                        if (rssiNow > s_rxFarMax) s_rxFarMax = rssiNow;
-                        if (s_rxFarCnt < 255) s_rxFarCnt++;
-                    }
                 }
 
                 // SYNC: read the telemetry ratio to size the silence timeout.  We
