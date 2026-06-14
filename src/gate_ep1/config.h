@@ -126,6 +126,14 @@
 // leaves, so a long gate window adds no lag to lap detection.
 #define UID_GATE_MS        10000    // report only if own-UID SYNC seen this recently
 
+// ---- Near-cluster bridge (steady reading) ----
+// The lap signal is the per-interval peak of the drone's near cluster (packets
+// above the TX background). That cluster is dense every interval, so at a fixed
+// distance it reads as a near-constant level. This short hold bridges the
+// occasional empty interval so the trace stays steady instead of dropping to the
+// floor for a frame; it still floors quickly once the drone leaves.
+#define NEAR_HOLD_MS         300    // bridge near-cluster gaps this long before flooring
+
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
 // Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
