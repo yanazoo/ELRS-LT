@@ -32,13 +32,13 @@ a **HappyModel EP1/EP2 TCXO**.
 |---|---|---|
 | `1.0.0` | Solid up to ~1:4 | Required 2 samples per report window; misses increase above 1:8 |
 | `1.0.1` | **Solid at 1:64 / functional at 1:128** | HOLD + ratio-adaptive silence (min=1), EMA α = 0.25 |
-| current `main` (multi-sniffer) | **Run the TX at 1:2** (dense capture = smooth) | telemetry-capture fix + envelope filter, SX1280 hang auto-recovery, UID gate, 4 sniffers at once, EMA α = 0.25 |
+| `1.1.0` (= current `main`, multi-sniffer) | **Run the TX at 1:2** (dense capture = smooth) | telemetry-capture fix + envelope filter, SX1280 hang auto-recovery, UID gate, 4 sniffers at once, EMA α = 0.25 |
 
-> `main` always tracks the latest. Each release is preserved as a tag-like branch
-> (`1.0.0` / `1.0.1`).
+> `main` always tracks the latest (currently 1.1.0). Each release is preserved as a
+> tag-like branch (`1.0.0` / `1.0.1` / `1.1.0`).
 >
-> Note: current `main` improved telemetry **capture** after `1.0.1`. In practice, set
-> the **TX telemetry ratio to 1:2** (dense capture, smooth trace — see below).
+> Note: `1.1.0` improved telemetry **capture** after `1.0.1`. In practice, set the
+> **TX telemetry ratio to 1:2** (dense capture, smooth trace — see below).
 
 ---
 
