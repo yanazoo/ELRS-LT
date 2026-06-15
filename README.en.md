@@ -16,7 +16,7 @@ a **HappyModel EP1/EP2 TCXO**.
 - **No drone modification** — keep the stock ELRS firmware. No XIAO beacon required
 - **EP1/EP2 TCXO repurposed as the gate receiver** — ESP8285 + SX1280 + TCXO; custom firmware does FHSS following + RSSI measurement
 - **Isolates the drone's telemetry (TRSS) only** — measures OTA packet type `0b11` (PACKET_TYPE_TLM) exclusively, so it never reacts to the stationary TX's signal level or movement. The calibration graph and lap detection both track the drone alone
-- **Wide telemetry-ratio support** — HOLD + ratio-adaptive silence makes it **solid up to 1:64 and functional at 1:128 (the 500 Hz "Std" default)**. Verified on ELRS 3.6.3
+- **Run the TX telemetry ratio at 1:2** — the gate captures the drone's telemetry *densely* only at **1:2** (a dwell then contains ~2 telemetry slots, so it survives the channel-retune that drops single-slot ratios), giving a smooth graph and a steady value. Higher ratios (1:4 / 1:8+) are captured sparsely and look choppy, so they are **not recommended**. An envelope filter further smooths the trace. Verified on ELRS 3.6.3
 - Up to 4 pilots timed simultaneously, roster of up to 20
 - Gate crossings detected via RSSI peak detection + a RotorHazard-style state machine
 - Smooth RSSI processing with an EMA filter (α = 0.25)
@@ -31,10 +31,14 @@ a **HappyModel EP1/EP2 TCXO**.
 | Branch | Stable telemetry-ratio range | Key differences |
 |---|---|---|
 | `1.0.0` | Solid up to ~1:4 | Required 2 samples per report window; misses increase above 1:8 |
-| `1.0.1` (= current `main`) | **Solid at 1:64 / functional at 1:128** | HOLD + ratio-adaptive silence (min=1), EMA α = 0.25 |
+| `1.0.1` | **Solid at 1:64 / functional at 1:128** | HOLD + ratio-adaptive silence (min=1), EMA α = 0.25 |
+| current `main` (multi-sniffer) | **Run the TX at 1:2** (dense capture = smooth) | telemetry-capture fix + envelope filter, SX1280 hang auto-recovery, UID gate, 4 sniffers at once, EMA α = 0.25 |
 
-> `main` always tracks the latest (currently 1.0.1). Each release is preserved as a
-> tag-like branch (`1.0.0` / `1.0.1`).
+> `main` always tracks the latest. Each release is preserved as a tag-like branch
+> (`1.0.0` / `1.0.1`).
+>
+> Note: current `main` improved telemetry **capture** after `1.0.1`. In practice, set
+> the **TX telemetry ratio to 1:2** (dense capture, smooth trace — see below).
 
 ---
 
@@ -156,14 +160,21 @@ that the drone sends back to its transmitter.
   telemetry is `0b11` (PACKET_TYPE_TLM)**. The TX sends only RC=`0b00` / MSP=`0b01` /
   SYNC=`0b10`. Measuring type `0b11` alone tracks the drone independent of the
   stationary TX's level or movement.
-- Telemetry gets sparser at higher ratios (interval = denominator × 2 ms: 1:16 = 32 ms …
-  **1:128 = 256 ms**). A single received sample refreshes a held value (HOLD); we report
-  it until a ratio-scaled silence timeout (1:64 → ~384 ms, 1:128 → 600 ms) elapses, then
-  drop to the floor. This keeps the trace from flickering to the floor between sparse samples.
-- The SYNC packet is read only for the telemetry ratio and UID validation; **the FHSS hop
-  grid is never re-anchored from SYNC** (re-anchoring broke the lock in testing).
-- **Recommended ratio**: for reliable lap timing use **1:64** (high ratio while staying
-  stable); for maximum stability use **1:2**.
+- **Capture density depends on the ratio.** The gate dwells 4 slots per channel and
+  retunes (briefly stops receiving) at each hop. At **1:4 / 1:8+** a dwell holds one
+  telemetry slot; when it collides with the retune it is missed, so capture is sparse
+  (a few per second) and the graph is choppy. At **1:2** a dwell holds ~2 telemetry
+  slots, so even if one is missed the other is caught — capture is dense (100+/s) and
+  the trace is smooth.
+- The report uses an **envelope follower**: it rises instantly to each telemetry sample
+  and decays slowly between (`ENV_DECAY_DB` per 50 ms), so the trace is a curve rather
+  than spiking to the floor — but real smoothness comes from the dense capture at 1:2.
+- The SYNC packet is read for the ratio + UID validation, and its **fhssIndex+nonce
+  re-anchor the hop phase to the TX** (`SYNC_PHASE_ALIGN`, fixes index drift; set to `0`
+  to disable).
+- **Recommended ratio: 1:2.** It captures densely, holds a steady value at a fixed
+  distance, and forms a smooth peak on a pass. High ratios (1:8…1:128) capture sparsely
+  and look choppy, so they are not recommended.
 
 ---
 
