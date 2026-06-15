@@ -27,9 +27,23 @@ typedef struct __attribute__((packed)) {
     uint8_t uid[6];  // ELRS bind UID (all-zero = clear)
 } GateProvisionPacket_t;
 
+// ---- Beacon event queued from the ESP-NOW recv callback to the main loop ----
+// The recv callback runs in the WiFi task; emitting UART JSON there would race
+// the main loop's Serial1 writes (interleaved bytes = corrupt lines) and can
+// block the WiFi task when the TX buffer is full. Beacons are queued instead
+// and drained by drainBeaconEvents() from loop().
+typedef struct {
+    uint8_t mac[6];   // EP1 source MAC
+    uint8_t state;    // 0=PROVISION 1=SCAN 2=FOLLOW
+    uint8_t uid[6];   // UID the EP1 currently follows (all-zero = none)
+} BeaconEvent_t;
+
 extern QueueHandle_t packetQueue;
 
 void setupEspNowGate();
+
+// Emit queued EP1 beacons as ep1_hello JSON on Serial1. Call from loop() only.
+void drainBeaconEvents();
 
 // Unicast a UID assignment to a specific EP1 by its MAC address.
 // MAC is learned from GateEP1BeaconPacket_t source address.

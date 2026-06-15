@@ -151,20 +151,34 @@ void processGateLine(const String& line) {
         wsText(line);
         int ep1State  = doc["state"] | -1;
         const char* mac = doc["mac"] | "";
-        if (ep1State >= 0 && ep1State <= 1 && strlen(mac) == 17) {
+        if (ep1State >= 0 && ep1State <= 2 && strlen(mac) == 17) {
             for (int s = 0; s < MAX_ACTIVE; s++) {
                 if (strcmp(slotEp1Mac[s], mac) != 0) continue;
                 if (ep1State == 0) {
                     // EP1 has no UID yet — send provision immediately
                     sendEp1ProvisionForSlot(s);
                 } else {
-                    // EP1 is scanning — re-provision if its UID doesn't match
+                    // SCAN or FOLLOW — re-provision if the followed UID doesn't
+                    // match the assigned pilot. FOLLOW (state 2) matters: at
+                    // power-up an unprovisioned EP1 auto-discovers the STRONGEST
+                    // drone, which with several drones airborne is often the
+                    // wrong one, then locks into FOLLOW; without this check it
+                    // would report the wrong pilot's RSSI forever.
+                    // Auto-discovered UIDs carry uid[0:1]=00 (those bytes are
+                    // not recoverable over the air), so compare only uid[2:5]
+                    // when the EP1 reports a 00:00-prefixed UID.
                     const char* ep1Uid = doc["uid"] | "";
                     int ri = activePilots[s];
                     if (ri >= 0 && ri < rosterCount && roster[ri].hasUid) {
                         char expected[18]; uidToStr(roster[ri].uid, expected);
-                        if (strcasecmp(ep1Uid, expected) != 0)
-                            sendEp1ProvisionForSlot(s);
+                        bool match = false;
+                        if (strlen(ep1Uid) == 17) {
+                            if (strncasecmp(ep1Uid, "00:00:", 6) == 0)
+                                match = (strcasecmp(ep1Uid + 6, expected + 6) == 0);
+                            else
+                                match = (strcasecmp(ep1Uid, expected) == 0);
+                        }
+                        if (!match) sendEp1ProvisionForSlot(s);
                     }
                 }
                 break;

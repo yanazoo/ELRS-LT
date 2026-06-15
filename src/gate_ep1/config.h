@@ -42,6 +42,18 @@
 // packet's reception to its slot boundary when re-anchoring the hop grid phase.
 #define PKT_AIRTIME_US       1100
 
+// ---- SYNC-nonce slot-phase alignment (experimental) ----
+// The TX SYNC packet carries fhssIndex (sequence position) + nonce (slot
+// counter). On each own-UID SYNC we re-anchor the hop grid to the TX: fix any
+// sequence-index drift (a channel repeats ~3x in the 240-long sequence, so the
+// gate can sit on the right channel but the wrong index and then hop wrong) and
+// re-phase s_nextHopUs so the dwell boundary aligns with the TX. The goal is
+// consistent telemetry-slot capture (steadier t3) and faster lock.
+// An earlier attempt at this broke FHSS lock; this one keeps the gate on the
+// channel it is already on (no immediate retune), clamps the phase, and relies
+// on MISS_STREAK_RESYNC as a safety net. Set to 0 to disable instantly.
+#define SYNC_PHASE_ALIGN     1
+
 // ---- Lock-on tuning ----
 // SCAN dwell must exceed one packet interval (500Hz = 2000us) so a parked
 // channel reliably catches a packet while the TX is transmitting on it.
@@ -112,7 +124,28 @@
 // high telemetry ratio on the TX (1:2…1:8 @ 500Hz = 4…16 ms between samples).
 // TLM_SILENCE_MS (300) is > the 1:128 interval (256 ms) so it never false-floors.
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
+
+// ---- Envelope follower (smooth trace from sparse telemetry) ----
+// Sparse telemetry (t3 ~0-2/s on a marginal link) makes the raw trace a
+// sawtooth. The reporter rises instantly to each telemetry sample and decays by
+// ENV_DECAY_DB per 50 ms report interval between samples, so the trace is a
+// smooth curve instead of spiking to the floor each gap. Smaller = smoother but
+// slower to fall when the drone leaves (lap-exit lag); larger = snappier but
+// choppier. ~2 dB/interval reaches the floor in ~1.9 s.
+#define ENV_DECAY_DB          2
 #define TLM_SILENCE_MS       300    // no TLM for this long -> report floor
+
+// ---- UID gate (multi-node: ignore other pilots' drones) ----
+// Each sniffer follows ONE pilot's UID. With several sniffers but only some
+// drones powered on, a sniffer whose drone is OFF cannot lock its own link and
+// instead briefly catches OTHER drones' packets, polluting its slot with noise.
+// The drone's TX sends SYNC packets carrying the bound UID; we report RSSI only
+// while a SYNC matching OUR UID has been seen within this window. A sniffer whose
+// TX is off never matches -> stays at the floor. The window is long (the TX emits
+// SYNC continuously regardless of drone position) so the correct sniffer is never
+// suppressed; telemetry silence still floors the trace promptly when the drone
+// leaves, so a long gate window adds no lag to lap detection.
+#define UID_GATE_MS        10000    // report only if own-UID SYNC seen this recently
 
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.

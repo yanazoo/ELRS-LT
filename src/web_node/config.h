@@ -4,7 +4,8 @@
 // UART to Gate Node
 #define GATE_RX_PIN   3
 #define GATE_TX_PIN   2
-#define GATE_BAUD     115200
+// MUST match UART_BAUD in src/gate_node/config.h — flash both nodes together.
+#define GATE_BAUD     230400
 
 // Pilot limits
 #define MAX_REGISTERED  20

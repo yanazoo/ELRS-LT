@@ -82,6 +82,16 @@
 // ---- Module state ----
 static int8_t s_last_rssi = -127;
 
+// ---- BUSY-stuck hang detection ----
+// The SX1280 occasionally latches its BUSY line HIGH and stops responding to
+// SPI commands (seen in the field after extended operation: "[sx] BUSY stuck
+// >50ms" repeats forever and pkts drop to 0).  Once that happens the chip never
+// recovers on its own — it needs a hardware reset.  busyWait() counts
+// CONSECUTIVE timeouts (cleared whenever BUSY is seen low); sxNeedsRecovery()
+// reports a persistent hang so the main loop can call sxRecover().
+static uint16_t s_busyStuckCount = 0;
+#define SX_BUSY_RECOVER_COUNT  8   // consecutive BUSY timeouts (~400ms) -> recover
+
 // ---- SPI helpers ----
 
 // Returns false if BUSY stays HIGH for more than 50 ms (avoids WDT reset).
@@ -90,10 +100,12 @@ static bool busyWait() {
     while (digitalRead(SX_PIN_BUSY)) {
         if (millis() - t0 > 50) {
             Serial.println("[sx] BUSY stuck >50ms");
+            s_busyStuckCount++;
             return false;
         }
         yield();
     }
+    s_busyStuckCount = 0;
     return true;
 }
 
@@ -135,6 +147,53 @@ static uint8_t readReg(uint16_t addr) {
     uint8_t val = SPI.transfer(0x00);
     digitalWrite(SX_PIN_NSS, HIGH);
     return val;
+}
+
+// Apply the fixed LoRa modem configuration. Shared by sxBegin() and sxRecover()
+// so the two paths can never drift apart. Assumes the chip was just reset and is
+// responsive (BUSY low).
+static void sxApplyLoRaConfig() {
+    // SetStandby RC — required before any configuration writes.
+    uint8_t stdby = STDBY_RC;
+    writeCmd(SX_CMD_SET_STANDBY, &stdby, 1);
+    delay(2);
+
+    // SetPacketType: LoRa
+    uint8_t pktType = PKT_TYPE_LORA;
+    writeCmd(SX_CMD_SET_PACKET_TYPE, &pktType, 1);
+
+    // SetModulationParams: SF5 / BW800 / CR_LI_4_6  (500Hz ELRS 3.x)
+    uint8_t modParams[3] = { ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR };
+    writeCmd(SX_CMD_SET_MOD_PARAMS, modParams, 3);
+    // Datasheet-required register patch for SF5/6 after SetModulationParams.
+    writeReg(REG_SF_ADDITIONAL_CONFIG, SF5_6_REG_PATCH);
+
+    // SetPacketParams: 7 bytes — preamble is ONE byte (direct symbol count),
+    // matching ELRS SX1280Driver::SetPacketParamsLoRa() from ELRS 3.6.3.
+    uint8_t pktParams[7] = {
+        ELRS_LORA_PREAMBLE,         // PreambleLength (single byte = symbol count)
+        ELRS_LORA_HEADER_IMPLICIT,  // HeaderType
+        ELRS_LORA_PAYLOAD,          // PayloadLength
+        ELRS_LORA_CRC_OFF,          // CrcMode
+        ELRS_LORA_IQ_NORMAL,        // InvertIQ
+        0x00,                        // reserved
+        0x00                         // reserved
+    };
+    writeCmd(SX_CMD_SET_PKT_PARAMS, pktParams, 7);
+
+    // SetBufferBaseAddress: TX base = 0, RX base = 0.
+    uint8_t baseAddr[2] = { 0x00, 0x00 };
+    writeCmd(SX_CMD_SET_BUFFER_BASE, baseAddr, 2);
+
+    // SetDioIrqParams: route RX_DONE + CRC_ERROR to DIO1.
+    uint16_t mask = IRQ_RX_DONE | IRQ_CRC_ERROR;
+    uint8_t irqParams[8] = {
+        (uint8_t)(mask >> 8), (uint8_t)(mask & 0xFF),   // IRQ mask
+        (uint8_t)(mask >> 8), (uint8_t)(mask & 0xFF),   // DIO1 mask
+        0x00, 0x00,                                       // DIO2 off
+        0x00, 0x00                                        // DIO3 off
+    };
+    writeCmd(SX_CMD_SET_DIO_IRQ, irqParams, 8);
 }
 
 // ---- Public API ----
@@ -190,52 +249,35 @@ bool sxBegin() {
     Serial.printf("[sx] FW ver=0x%04X\n", fwVer);
     if (fwVer == 0x0000 || fwVer == 0xFFFF) return false;
 
-    // SetPacketType: LoRa
-    uint8_t pktType = PKT_TYPE_LORA;
-    writeCmd(SX_CMD_SET_PACKET_TYPE, &pktType, 1);
-
-    // SetModulationParams: SF5 / BW800 / CR_LI_4_6  (500Hz ELRS 3.x)
-    uint8_t modParams[3] = { ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR };
-    writeCmd(SX_CMD_SET_MOD_PARAMS, modParams, 3);
-    // Datasheet-required register patch for SF5/6 after SetModulationParams.
-    writeReg(REG_SF_ADDITIONAL_CONFIG, SF5_6_REG_PATCH);
-
+    // Apply the shared LoRa modem configuration (re-issues SetStandby, harmless).
+    sxApplyLoRaConfig();
     Serial.printf("[sx] config: SF=0x%02X BW=0x%02X CR=0x%02X preamble=%d payload=%d\n",
                   ELRS_LORA_SF, ELRS_LORA_BW, ELRS_LORA_CR,
                   ELRS_LORA_PREAMBLE, ELRS_LORA_PAYLOAD);
 
-    // SetPacketParams: 7 bytes — preamble is ONE byte (direct symbol count),
-    // matching ELRS SX1280Driver::SetPacketParamsLoRa() from ELRS 3.6.3.
-    // Previous code used two bytes {0x00, 12} which shifted all fields by 1.
-    uint8_t pktParams[7] = {
-        ELRS_LORA_PREAMBLE,         // PreambleLength (single byte = symbol count)
-        ELRS_LORA_HEADER_IMPLICIT,  // HeaderType
-        ELRS_LORA_PAYLOAD,          // PayloadLength
-        ELRS_LORA_CRC_OFF,          // CrcMode
-        ELRS_LORA_IQ_NORMAL,        // InvertIQ
-        0x00,                        // reserved
-        0x00                         // reserved
-    };
-    writeCmd(SX_CMD_SET_PKT_PARAMS, pktParams, 7);
-
-    // SetBufferBaseAddress: TX base = 0, RX base = 0.  This makes every received
-    // packet land at offset 0, so ReadBuffer from the rxStartBufferPointer (which
-    // equals the RX base) reliably returns the packet bytes.  Defaults to 0 after
-    // reset, but ELRS sets it explicitly and so do we (defensive).
-    uint8_t baseAddr[2] = { 0x00, 0x00 };
-    writeCmd(SX_CMD_SET_BUFFER_BASE, baseAddr, 2);
-
-    // SetDioIrqParams: route RX_DONE + CRC_ERROR to DIO1.
-    uint16_t mask = IRQ_RX_DONE | IRQ_CRC_ERROR;
-    uint8_t irqParams[8] = {
-        (uint8_t)(mask >> 8), (uint8_t)(mask & 0xFF),   // IRQ mask
-        (uint8_t)(mask >> 8), (uint8_t)(mask & 0xFF),   // DIO1 mask
-        0x00, 0x00,                                       // DIO2 off
-        0x00, 0x00                                        // DIO3 off
-    };
-    writeCmd(SX_CMD_SET_DIO_IRQ, irqParams, 8);
-
     return true;
+}
+
+bool sxNeedsRecovery() {
+    return s_busyStuckCount >= SX_BUSY_RECOVER_COUNT;
+}
+
+void sxRecover() {
+    Serial.println(F("[sx] recover: hardware reset + reconfigure"));
+    // Hardware reset pulse: hold RST LOW 100 µs, then release.
+    digitalWrite(SX_PIN_RST, LOW);
+    delayMicroseconds(100);
+    digitalWrite(SX_PIN_RST, HIGH);
+    // Poll BUSY until boot completes; bounded so a truly dead chip cannot wedge
+    // loop() (the caller escalates to a full reboot if recovery keeps failing).
+    uint32_t t0 = millis();
+    while (digitalRead(SX_PIN_BUSY)) {
+        if (millis() - t0 > 200) break;
+        yield();
+    }
+    sxApplyLoRaConfig();
+    s_busyStuckCount = 0;
+    Serial.printf("[sx] recover done, BUSY=%d\n", digitalRead(SX_PIN_BUSY));
 }
 
 void sxSetFrequencyHz(uint32_t freqHz) {

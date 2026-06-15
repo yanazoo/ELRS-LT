@@ -55,9 +55,14 @@ static SnifferIdentity_t ident = { {0}, false };
 // refresh the hold (no per-interval minimum).
 static int8_t   s_tlmRssiMax  = RSSI_FLOOR_DBM;  // max telemetry RSSI this report interval
 static uint8_t  s_tlmIntervalCnt = 0;  // telemetry packets this report interval
-static int8_t   s_tlmHoldRssi = RSSI_FLOOR_DBM;  // held value reported between samples
-static uint32_t s_lastTlmMs   = 0;     // last report interval that carried telemetry
-static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // adaptive hold timeout
+static int8_t   s_envRssi     = RSSI_FLOOR_DBM;  // envelope-follower output (reported value)
+static uint32_t s_silenceMs   = TLM_SILENCE_DEFAULT_MS;  // diag/log only (telemetry ratio)
+// UID gate: time (millis) of the last SYNC packet whose UID matched OURS.
+// We only report RSSI while this is fresh, so a node whose assigned drone is
+// powered off (or that briefly catches a DIFFERENT drone's packets) stays at the
+// floor instead of polluting its slot with the wrong drone's signal. 0 = never
+// confirmed since the last (re)provision.
+static uint32_t s_lastUidSyncMs = 0;
 static uint32_t s_tlmLogMs    = 0;     // 1 Hz serial debug timer
 static uint16_t s_pktCount    = 0;     // all packets since last debug log
 static uint16_t s_tlmPktCount = 0;     // TLM packets since last debug log (1 Hz)
@@ -323,6 +328,7 @@ static void applyProvision() {
         hopIndex = 0; missStreak = 0;
         s_lqHead = 0; s_lqSum = 0;
         memset(s_lqBuf, 0, sizeof(s_lqBuf));
+        s_lastUidSyncMs = 0;   // new UID: require a fresh own-drone SYNC to report
         state = ST_SCAN;
         Serial.println(F("[gate_ep1] -> SCAN"));
     } else {
@@ -458,10 +464,41 @@ void setup() {
 #endif
 }
 
+// ---- SX1280 hang recovery ----
+// The radio can latch BUSY HIGH and stop responding (pkts drop to 0, "[sx] BUSY
+// stuck >50ms" repeats forever). sxRecover() hardware-resets it; if recovery
+// keeps failing the chip is dead and only a full MCU reboot clears it.
+#define SX_MAX_RECOVER 30      // consecutive recoveries with no re-lock -> reboot
+static uint16_t s_sxRecoverCount = 0;
+
 void loop() {
     applyProvision();       // handle ESP-NOW provision before state machine
     maybeSendBeacon();      // 5 s presence beacon
     updateLedHeartbeat();   // non-blocking state indicator
+
+    // Radio hung? Hardware-reset it and re-acquire. Escalate to a full reboot if
+    // recovery never sticks (s_sxRecoverCount is cleared on the next re-lock).
+    if (sxNeedsRecovery()) {
+        sxRecover();
+        if (++s_sxRecoverCount >= SX_MAX_RECOVER) {
+            Serial.println(F("[gate_ep1] SX1280 unrecoverable -> reboot"));
+            ESP.restart();
+        }
+        missStreak = 0;
+        s_nextHopUs = 0;
+        s_lqHead = 0; s_lqSum = 0; memset(s_lqBuf, 0, sizeof(s_lqBuf));
+        if (ident.valid) {
+            state = ST_SCAN;
+            Serial.println(F("[gate_ep1] SX1280 recovered -> SCAN"));
+        } else {
+            state = ST_PROVISION;
+#ifndef BRINGUP_UID
+            autoReset();
+#endif
+            Serial.println(F("[gate_ep1] SX1280 recovered -> PROVISION"));
+        }
+        return;
+    }
 
     switch (state) {
 
@@ -473,6 +510,7 @@ void loop() {
             s_lqHead   = 0;
             s_lqSum    = 0;
             memset(s_lqBuf, 0, sizeof(s_lqBuf));
+            s_lastUidSyncMs = 0;   // require a fresh own-drone SYNC before reporting
             state = ST_SCAN;
             Serial.println(F("[gate_ep1] -> SCAN"));
 #ifndef BRINGUP_UID
@@ -492,6 +530,7 @@ void loop() {
                 s_lqHead   = 0;
                 s_lqSum    = 0;
                 memset(s_lqBuf, 0, sizeof(s_lqBuf));
+                s_lastUidSyncMs = 0;   // require a fresh own-drone SYNC before reporting
                 state = ST_SCAN;
                 Serial.println(F("[gate_ep1] auto-discover -> SCAN"));
                 autoReset();
@@ -515,6 +554,7 @@ void loop() {
         if (scanGot) {
             // Stay on the channel we just caught — FOLLOW resumes tracking here.
             missStreak = 0;
+            s_sxRecoverCount = 0;   // chip is receiving again: clear recovery escalation
             state = ST_FOLLOW;
             Serial.print(F("[gate_ep1] locked hop="));
             Serial.print(hopIndex);
@@ -563,39 +603,27 @@ void loop() {
                 sxReadPayload(buf, 1);
                 uint8_t pktType = buf[0] & OTA_TYPE_MASK;
 
-                // Read RSSI once per packet.  s_tlmRssiMax accumulates only the
-                // TLM (type 0b11 = drone) packets, which is what we report.
-                int8_t rssiNow = sxReadRssiNow();
                 s_rawType[pktType]++;
-                if (rssiNow > s_rawRssiMax)  s_rawRssiMax  = rssiNow;
                 s_pktCount++;
 
                 // ELRS 3.6.3: the drone's telemetry uplink is OTA type 0b11
-                // (PACKET_TYPE_TLM).  The TX only ever sends RC=0b00 / MSP=0b01 /
-                // SYNC=0b10, so type 0b11 alone identifies the drone — independent
-                // of TX level or movement.  This is the primary separation.
+                // (PACKET_TYPE_TLM); the TX only sends RC=0b00 / MSP=0b01 /
+                // SYNC=0b10, so type 0b11 alone identifies the drone.
+                //
+                // RSSI is read ONLY for telemetry packets. Reading GetPacketStatus
+                // (a 6-byte SPI transfer) for EVERY packet -- added earlier for the
+                // TX-background histogram -- stretched per-packet handling toward a
+                // full slot, so the loop phase-locked onto the downlink and starved
+                // the telemetry slots (t0 caught ~250/s but t3 collapsed to ~1-6/s
+                // at ratio 1:8, where ~62/s is expected). Reading RSSI lazily here
+                // restores dense telemetry capture. The histogram / near cluster it
+                // fed is no longer used (reporting is telemetry-only).
                 if (pktType == OTA_TYPE_TLM) {
+                    int8_t rssiNow = sxReadRssiNow();
                     if (rssiNow > s_tlmRssiMax) s_tlmRssiMax = rssiNow;
+                    if (rssiNow > s_rawRssiMax) s_rawRssiMax = rssiNow;
                     s_tlmPktCount++;
                     if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
-                }
-
-                // TX-background notch (Tier-2 fallback): histogram every packet
-                // (mode = constant TX level) and split packets that deviate from
-                // the current TX level into the drone's near (above) / far (below)
-                // clusters.
-                int idx = -(int)rssiNow;
-                if (idx < 0)   idx = 0;
-                if (idx > 127) idx = 127;
-                s_rssiHist[idx]++;
-                if (s_txBgValid) {
-                    if (rssiNow > (int)s_txBg + TXBG_GUARD_DB) {
-                        if (rssiNow > s_rxNearMax) s_rxNearMax = rssiNow;
-                        if (s_rxNearCnt < 255) s_rxNearCnt++;
-                    } else if (rssiNow < (int)s_txBg - TXBG_GUARD_DB) {
-                        if (rssiNow > s_rxFarMax) s_rxFarMax = rssiNow;
-                        if (s_rxFarCnt < 255) s_rxFarCnt++;
-                    }
                 }
 
                 // SYNC: read the telemetry ratio to size the silence timeout.  We
@@ -611,6 +639,25 @@ void loop() {
                                  ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) &
                                   OTA_SYNC_UID5_HIBITS) == 0;
                     if (uidOk) {
+                        // Confirmed we are tracking OUR drone (SYNC carries
+                        // UID[3],UID[4],UID[5]hi). Stamps the UID gate.
+                        s_lastUidSyncMs = millis();
+#if SYNC_PHASE_ALIGN
+                        // Re-anchor the hop grid to the TX. We received this SYNC
+                        // on the TX's current channel, so our sequence index must
+                        // be syncFhss (fix any wrong-occurrence index drift), and
+                        // the dwell ends (HOP_INTERVAL - slot) slots from the start
+                        // of this SYNC's slot. We do NOT retune now (we are already
+                        // on the right channel); only the index for the NEXT hop
+                        // and the phase are corrected.
+                        uint8_t syncFhss = buf[OTA_SYNC_FHSS_BYTE];
+                        uint8_t slot     = buf[OTA_SYNC_NONCE_BYTE] % FHSS_HOP_INTERVAL;
+                        hopIndex = (uint16_t)(syncFhss % FHSS_SEQUENCE_LEN);
+                        int32_t toNext = (int32_t)(FHSS_HOP_INTERVAL - slot) * ELRS_SLOT_US
+                                         - PKT_AIRTIME_US;
+                        if (toNext < 0) toNext = 0;
+                        s_nextHopUs = micros() + (uint32_t)toNext;
+#endif
                         uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT)
                                          & OTA_SYNC_TLMRATIO_MASK;
                         uint8_t denom = TLM_DENOM_LUT[tlmIdx];
@@ -671,25 +718,26 @@ void loop() {
         // Report RSSI over ESP-NOW once per interval, OUTSIDE the capture loop
         // so no WiFi TX competes with slot catching.
         if ((now - lastReport) >= RSSI_REPORT_MS) {
-            // Telemetry (type 0b11 = drone) drives the trace.  A single telemetry
-            // packet this interval refreshes the held value and its timestamp; we
-            // then HOLD that value until no telemetry has arrived for s_silenceMs
-            // (which scales with the telemetry ratio), after which we drop to the
-            // floor.  This keeps sparse high-ratio telemetry (up to 1:128) from
-            // flickering to the floor between samples, while still falling cleanly
-            // when the drone truly stops (off / disarmed / out of range).
-            if (s_tlmIntervalCnt >= 1) {
-                s_tlmHoldRssi = s_tlmRssiMax;   // newest telemetry level
-                s_lastTlmMs   = now;
-            }
-            int8_t reportRssi;
-            if (s_lastTlmMs != 0 && (now - s_lastTlmMs) < s_silenceMs) {
-                reportRssi = s_tlmHoldRssi;     // hold between / during samples
+            // Envelope follower: telemetry arrives sparsely (t3 ~0-2/s when the
+            // link is marginal), so reporting the raw telemetry-or-floor makes a
+            // sawtooth. Instead RISE instantly to each new telemetry level and
+            // DECAY slowly between samples (ENV_DECAY_DB per 50 ms interval), so
+            // the trace is a smooth curve that tracks the drone and only reaches
+            // the floor after the telemetry truly stops. UID gate still applies:
+            // an unconfirmed node decays to the floor and stays there.
+            bool uidConfirmed = (s_lastUidSyncMs != 0) &&
+                                (now - s_lastUidSyncMs) < UID_GATE_MS;
+            int8_t tlmVal = (uidConfirmed && s_tlmIntervalCnt >= 1)
+                              ? s_tlmRssiMax : (int8_t)RSSI_FLOOR_DBM;
+            if (tlmVal > s_envRssi) {
+                s_envRssi = tlmVal;                       // rise instantly to telemetry
             } else {
-                reportRssi = (int8_t)RSSI_FLOOR_DBM;
-                s_tlmHoldRssi = (int8_t)RSSI_FLOOR_DBM;
+                int16_t d = (int16_t)s_envRssi - ENV_DECAY_DB;   // decay slowly
+                if (d < tlmVal)          d = tlmVal;      // don't undershoot live telemetry
+                if (d < RSSI_FLOOR_DBM)  d = RSSI_FLOOR_DBM;
+                s_envRssi = (int8_t)d;
             }
-            espnowSendRssi(ident.uid, reportRssi, lqPct(), now);
+            espnowSendRssi(ident.uid, s_envRssi, lqPct(), now);
             // Roll up 1 Hz diagnostics before clearing the interval accumulators.
             if (s_rxNearMax > s_dbgNearMax) s_dbgNearMax = s_rxNearMax;
             if (s_rxFarMax  > s_dbgFarMax)  s_dbgFarMax  = s_rxFarMax;
