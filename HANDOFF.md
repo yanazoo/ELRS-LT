@@ -30,11 +30,18 @@
 
 | コンポーネント | 状態 | 場所 |
 |----------------|------|------|
-| Gate EP スニファーファーム | 新規 | `src/gate_ep1/` |
+| Gate EP スニファーファーム（単機） | 新規 | `src/gate_ep1/` |
+| Gate EP スニファーファーム（デュアル） | 新規（後日追加） | `src/gate_ep1_dual/` |
 | Gate Node の ESP-NOW 受信 | 変更（MACキー -> UIDキー） | `src/gate_node/promiscuous.*` |
 | パイロット識別 | 変更（MAC -> 6バイトUID） | `src/gate_node/pilots.*`, web roster |
 | Aircraft Node（XIAO C3 ビーコン） | 削除 | 今後は焼かない |
-| platformio env `gate_ep1` | 新規 | `platformio.ini` |
+| platformio env `gate_ep1` / `gate_ep1_dual` | 新規 | `platformio.ini` |
+
+> **デュアル機（EP1 Dual TCXO = ESP32-PICO-D4 + SX1280×2）について**
+> 単機（ESP8285×SX1280×1）が FHSS追従とテレメトリ捕捉を時分割するのに対し、
+> デュアル機は Radio A=同期アンカー / Radio B=テレメトリ計測に分業し、高比率
+> （〜1:128）でも取りこぼしを無くす。ESP-NOW のワイヤープロトコルは単機と同一で
+> `gate_node`/`web_node` は無改修。詳細は `ARCHITECTURE.md` のデュアル無線セクション。
 
 ## ハードウェアの役割
 
@@ -60,17 +67,20 @@
 ## セキュリティ / リポジトリ運用
 
 - 実際のバインド UID、バインドフレーズ、WiFi パスワード、各種キーはコミットしない。
-- `src/gate_ep1/secrets.h` は gitignore 対象にする。テンプレートとして
-  `secrets.example.h` をコミット済み。push 前に実 UID/フレーズが staged に
-  含まれていないか必ず確認すること。
+- `src/gate_ep1/secrets.h` および `src/gate_ep1_dual/secrets.h` は gitignore 対象。
+  テンプレートとして各ディレクトリに `secrets.example.h` をコミット済み。push 前に
+  実 UID/フレーズが staged に含まれていないか必ず確認すること。
 - web_node の既存 AP パスワードは既知のデフォルト値。秘匿情報ではないが、
   変更する場合はその旨を明示する。
 
 ## ビルド / 書き込みクイックスタート
 
 ```
-# Gate sniffer (EP1/EP2 TCXO = ESP8285) - パイロットスロットごとに4台焼く
+# Gate sniffer 単機 (EP1/EP2 TCXO = ESP8285) - パイロットスロットごとに4台焼く
 pio run -e gate_ep1 -t upload
+
+# Gate sniffer デュアル (EP1 Dual TCXO = ESP32-PICO-D4 + SX1280×2)
+pio run -e gate_ep1_dual -t upload
 
 # Gate Node (ESP32-WROVER / TTGO T8)
 pio run -e gate_node -t upload
@@ -143,8 +153,17 @@ VCC   ->  3V3
   （gate_node/web_node 両方を同 baud で焼く）、FOLLOW 中の誤 UID は再プロビジョニング、
   UID ゲートで担当ドローン OFF のノードは静音、SX1280 の BUSY 固着は自動ハードリセット復旧。
 
+対応中（デュアル機で着手）:
+- **高比率（1:8 以上）での捕捉率向上** -> `src/gate_ep1_dual/`（EP1 Dual TCXO,
+  SX1280×2）で対応。Radio A が同期を保持し、Radio B が現chにドウェル全体＋境界の先まで
+  駐留してリチューン盲点を埋めるため、**1:128 でも取りこぼさず捕捉**できる。ただし
+  改善するのは捕捉の確実性であり、テレメトリ発生レート自体（=比率）は変わらない点に注意
+  （1:128 @ 500Hz = 256ms間隔。ラップ"タイム"の時間分解能はこの間隔が上限）。
+
 未解決 / 今後の課題:
-- **高比率（1:8 以上）での捕捉率向上**は未解決。1:2 運用で回避できているが、リチューンと
-  テレメトリスロットの位相衝突を根本的に減らせれば高比率でも密に取れる可能性がある。
+- デュアル機ファームは**未コンパイル/未実機検証**。EP1 Dual の実機でピン配置
+  （Generic 2400 True Diversity PA: SCK25/MISO33/MOSI32, A:NSS27/BUSY36/DIO37/RST26,
+  B:NSS13/BUSY39/DIO34/RST21）・PA/RFスイッチ・LED・TCXO給電を裏取りすること。
+- 250Hz など他レートへの対応（現状は 500Hz 固定。`ELRS_SLOT_US` 等を切替で対応可能）。
 - スニファー以外の EP 向けに CRSF-UART フォールバック経路を残すか。
-- バッチで焼く前に、現物でピン配置を裏取りすること。
+- 単機機もバッチで焼く前に、現物でピン配置を裏取りすること。
