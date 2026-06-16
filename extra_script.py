@@ -27,8 +27,10 @@ for lib_name in sorted(os.listdir(arduino_libs)):
     if os.path.isdir(lib_src):
         env.Append(CPPPATH=[lib_src])
 
-# 2. Only compile and link Network for environments that use WiFi (web_node).
-if env.subst("$PIOENV") != "web_node":
+# 2. Only compile and link Network for environments that use WiFi.
+#    web_node      -> WiFi AP + async web server
+#    gate_ep1_dual -> WiFi STA + ESP-NOW (WiFi.h pulls in Network on core 3.x)
+if env.subst("$PIOENV") not in ("web_node", "gate_ep1_dual"):
     Return()
 
 network_src = os.path.join(arduino_libs, "Network", "src")

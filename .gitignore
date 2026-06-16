@@ -9,3 +9,4 @@ compile_commands.json
 
 # EP1 sniffer local secrets (real UIDs / Gate MAC live here — never commit)
 src/gate_ep1/secrets.h
+src/gate_ep1_dual/secrets.h

@@ -125,8 +125,12 @@
 ## ビルド・書き込み
 
 ```bash
-# Gate EP1 Sniffer (EP1/EP2 TCXO = ESP8285) — パイロット数分用意
+# Gate EP1 Sniffer (EP1/EP2 TCXO = ESP8285, 単機) — パイロット数分用意
 pio run -e gate_ep1 -t upload
+
+# Gate EP1 DUAL Sniffer (EP1 Dual TCXO = ESP32-PICO-D4 + SX1280×2)
+# 同期用とテレメトリ用に無線を分業し、高比率(〜1:128)でも確実に捕捉
+pio run -e gate_ep1_dual -t upload
 
 # Gate Node (ESP32-WROVER-E / LilyGo TTGO T8 V1.8)
 pio run -e gate_node -t upload
@@ -169,6 +173,53 @@ EP1/EP2 書き込み配線（USB-シリアル変換, **必ず 3.3V**）:
 
 ---
 
+## EP1 Dual（デュアルTCXO）— 高比率（〜1:128）対応版
+
+単機（ESP8285）版は1基のSX1280で「FHSS追従」と「テレメトリ捕捉」を時分割するため、
+高比率（1:8以上）では捕捉が疎になりがちでした。**HappyModel EP1 Dual TCXO**
+（**ESP32-PICO-D4 + SX1280×2** のトゥルーダイバーシティ機）を流用すると、この2役を
+2基に分業でき、**テレメトリ比率 1:128 でもラップ計測が成立**します。
+
+### しくみ
+
+ELRS では1ドウェル中、TXダウンリンク（RC/SYNC）とドローンのテレメトリ uplink（TRSS）は
+**同じFHSSチャンネル**で送受信されます。単機が取りこぼす原因は主に
+**ホップ境界のリチューン盲点（約0.5〜1ms 受信不能）** と **SYNC間のグリッド・ドリフト**。
+毎秒約4発しかない1:128では、その1発が盲点と重なると即欠落します。
+
+| 無線 | 役割 | 動作 |
+|---|---|---|
+| **Radio A（同期アンカー）** | TX FHSS/SYNC 監視 | ドウェル前半は現chでSYNCを捕捉し位相/UID/比率を固定。最終slotで次chへ先回りし、境界をまたいでも聞き続ける。SCAN/再同期も担当 |
+| **Radio B（テレメトリ計測）** | RX TRSS 監視 | 現chにドウェル全体＋境界の少し先（tail linger）まで駐留し、type `0b11` のRSSIを計測。Aがリチューンで聞けない末尾slotをBがカバー＝**盲点ゼロ** |
+
+両者で全slotを切れ目なくカバーするため、希少なテレメトリも確実に捕捉できます。
+
+### 限界（正直なところ）
+
+デュアル化で改善するのは **「捕捉の確実性」** で、**テレメトリの発生レート自体は比率で決まり変わりません**
+（1:128 @ 500Hz = 256ms間隔 ≒ 毎秒4サンプル）。つまり：
+
+- ✅ **1:128 でも取りこぼさずRSSIを拾える** → ラップ検出が安定して成立
+- ⚠️ **ラップ"タイム"の時間分解能** はサンプル間隔（最大256ms）に縛られる
+
+「高比率でアップリンク帯域を節約しつつ確実にラップ検出したい」用途に最適。コンマ秒を
+争う精密計測なら、捕捉が確実でも低比率（1:2〜1:8）の方がサンプルが密で有利、という関係は変わりません。
+
+### 配線（EP1 Dual の内部ピン — Generic 2400 True Diversity PA / ESP32）
+
+```
+共有SPI: SCK=GPIO25  MISO=GPIO33  MOSI=GPIO32
+Radio A: NSS=GPIO27  BUSY=GPIO36  DIO1=GPIO37  RST=GPIO26
+Radio B: NSS=GPIO13  BUSY=GPIO39  DIO1=GPIO34  RST=GPIO21
+```
+
+> ※ ピンは ELRS 公式ターゲット定義に基づく初期値です。実機で必ず確認してください
+> （PA/RFスイッチ・LED ピンは基板依存）。書き込みは ESP32 として UART/BetaflightPassthrough で行います。
+
+詳細は [ARCHITECTURE.md](ARCHITECTURE.md) のデュアル無線セクションを参照。
+
+---
+
 ## Web UI
 
 **接続:** WiFi SSID `ESP-NOW-LT` (PASS: `esp-now-lt`) → ブラウザで `http://20.0.0.1`
@@ -198,11 +249,12 @@ EP1/EP2 書き込み配線（USB-シリアル変換, **必ず 3.3V**）:
 
 ```
 src/
-├─ gate_ep1/    EP1/EP2 TCXO スニファーファーム (ESP8285)
-├─ gate_node/   ゲートノード (TTGO T8) — ESP-NOW 受信 + EMA ラップ検出
-└─ web_node/    Web ノード (XIAO S3) — WiFi AP + レース管理 UI
-data/           Web UI (LittleFS)
-boards/         カスタムボード定義
+├─ gate_ep1/       EP1/EP2 TCXO 単機スニファーファーム (ESP8285)
+├─ gate_ep1_dual/  EP1 Dual TCXO デュアル無線スニファーファーム (ESP32-PICO-D4 + SX1280×2)
+├─ gate_node/      ゲートノード (TTGO T8) — ESP-NOW 受信 + EMA ラップ検出
+└─ web_node/       Web ノード (XIAO S3) — WiFi AP + レース管理 UI
+data/              Web UI (LittleFS)
+boards/            カスタムボード定義
 ```
 
 詳細は [HANDOFF.md](HANDOFF.md) と [ARCHITECTURE.md](ARCHITECTURE.md) を参照。
