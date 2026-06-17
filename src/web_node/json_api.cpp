@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <new>
 #include "json_api.h"
 #include "data_model.h"
 
@@ -49,20 +50,6 @@ String activeJson() {
     String s; serializeJson(doc, s); return s;
 }
 
-String lapsJson() {
-    JsonDocument doc;
-    JsonArray arr = doc.to<JsonArray>();
-    for (int i = 0; i < lapCount; i++) {
-        JsonObject o = arr.add<JsonObject>();
-        int ri = laps[i].rosterIdx;
-        o["slot"]    = laps[i].slot;
-        o["name"]    = (ri >= 0 && ri < rosterCount) ? roster[ri].name : "---";
-        o["lapTime"] = laps[i].lapTimeMs;
-        o["ts"]      = laps[i].timestamp;
-    }
-    String s; serializeJson(doc, s); return s;
-}
-
 String scanJson() {
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
@@ -75,11 +62,26 @@ String scanJson() {
     String s; serializeJson(doc, s); return s;
 }
 
+// Max accepted request-body size. All API bodies are small JSON; this caps the
+// per-request allocation so a rogue/huge Content-Length cannot exhaust the heap
+// on the AsyncTCP task.
+#define MAX_BODY_BYTES 4096
+
 void handleBody(AsyncWebServerRequest* req,
                 uint8_t* data, size_t len, size_t index, size_t total,
                 std::function<void(AsyncWebServerRequest*, const char*)> cb) {
     struct BodyBuf { char* buf; size_t total; };
-    if (index == 0) req->_tempObject = new BodyBuf{ new char[total+1], total };
+    if (index == 0) {
+        if (total > MAX_BODY_BYTES) {
+            req->send(413, "application/json", R"({"error":"body too large"})");
+            return;  // _tempObject stays null; later chunks are ignored below
+        }
+        char* b = new (std::nothrow) char[total + 1];
+        if (!b) { req->send(500, "application/json", R"({"error":"oom"})"); return; }
+        auto* nb = new (std::nothrow) BodyBuf{ b, total };
+        if (!nb) { delete[] b; req->send(500, "application/json", R"({"error":"oom"})"); return; }
+        req->_tempObject = nb;
+    }
     auto* bb = reinterpret_cast<BodyBuf*>(req->_tempObject);
     if (!bb) return;
     memcpy(bb->buf + index, data, len);

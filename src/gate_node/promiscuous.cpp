@@ -22,9 +22,9 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
     if (len == (int)sizeof(GateEP1Packet_t)) {
         GateEP1Packet_t pkt;
         memcpy(&pkt, data, sizeof(pkt));
-        BaseType_t woken = pdFALSE;
-        xQueueSendFromISR(packetQueue, &pkt, &woken);
-        if (woken) portYIELD_FROM_ISR();
+        // The ESP-NOW recv callback runs in the WiFi task (NOT an ISR), so use
+        // the task-context queue API, not xQueueSendFromISR/portYIELD_FROM_ISR.
+        xQueueSend(packetQueue, &pkt, 0);
 
     } else if (len >= (int)sizeof(GateEP1BeaconPacket_t) && len <= 16) {
         const GateEP1BeaconPacket_t *b = (const GateEP1BeaconPacket_t *)data;
@@ -36,9 +36,7 @@ static void onEspNowRecv(const uint8_t *srcMac, const uint8_t *data, int len) {
         memcpy(evt.mac, srcMac, 6);
         evt.state = b->state;
         memcpy(evt.uid, b->uid, 6);
-        BaseType_t woken = pdFALSE;
-        xQueueSendFromISR(beaconQueue, &evt, &woken);
-        if (woken) portYIELD_FROM_ISR();
+        xQueueSend(beaconQueue, &evt, 0);
 
     } else {
         // Unknown packet size — log so we can see if EP1 is reaching us at all

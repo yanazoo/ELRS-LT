@@ -28,7 +28,6 @@ struct LapRecord {
 
 struct SlotRuntime {
     int      rssi;
-    int      rawRssi;
     bool     crossing;
     bool     signal;
     uint32_t lastTs;

@@ -22,6 +22,97 @@ int         restoreCount = 0;
 ScanMac     scanMacs[MAX_SCAN_MACS];
 int         scanMacCount = 0;
 
+// Laps longer than this are treated as gate-reboot artifacts (see processGateLine).
+#define LAP_MS_MAX 600000UL   // 10 minutes
+
+// ── Deferred, non-blocking gate dumps ─────────────────────────────────────────
+// The race-CSV and pilot-backup dumps stream many UART lines and previously paced
+// them with delay() inside the HTTP request handler — i.e. on the AsyncTCP task,
+// blocking the whole web server for up to several seconds (watchdog / dropped
+// connections). They are now requested by the handler (which returns immediately)
+// and streamed here from loop(), one line per pacing interval, blocking nothing.
+volatile bool gReqRaceSave     = false;   // set by /api/race/save (only when it will write)
+volatile bool gReqPilotsBackup = false;   // set by /api/sd/pilots/backup
+
+static enum { DUMP_IDLE, DUMP_RACE, DUMP_BACKUP } s_dumpState = DUMP_IDLE;
+static int      s_dumpIdx = 0;
+static int      s_dumpPerSlot[MAX_ACTIVE];
+static uint32_t s_dumpStepMs = 0;
+static const uint32_t DUMP_BEGIN_GAP_MS      = 300;  // let the gate open the file
+static const uint32_t DUMP_RACE_ROW_GAP_MS   = 15;
+static const uint32_t DUMP_BACKUP_ROW_GAP_MS = 80;
+
+void runDeferredGateTasks() {
+    uint32_t now = millis();
+
+    if (s_dumpState == DUMP_IDLE) {
+        if (gReqRaceSave) {
+            gReqRaceSave = false;
+            sendGateCmd("sd_race_save_begin");
+            for (int s = 0; s < MAX_ACTIVE; s++) s_dumpPerSlot[s] = 0;
+            s_dumpIdx = 0; s_dumpStepMs = now; s_dumpState = DUMP_RACE;
+        } else if (gReqPilotsBackup) {
+            gReqPilotsBackup = false;
+            sendGateCmd("sd_begin_backup");
+            s_dumpIdx = 0; s_dumpStepMs = now; s_dumpState = DUMP_BACKUP;
+        }
+        return;
+    }
+
+    if (s_dumpState == DUMP_RACE) {
+        uint32_t gap = (s_dumpIdx == 0) ? DUMP_BEGIN_GAP_MS : DUMP_RACE_ROW_GAP_MS;
+        if (now - s_dumpStepMs < gap) return;
+        s_dumpStepMs = now;
+        if (s_dumpIdx < lapCount) {
+            int s  = laps[s_dumpIdx].slot;
+            int ri = laps[s_dumpIdx].rosterIdx;
+            int lapNo = (s >= 0 && s < MAX_ACTIVE) ? ++s_dumpPerSlot[s] : 0;
+            char uid[18] = "";
+            if (ri >= 0 && ri < rosterCount && roster[ri].hasUid) uidToStr(roster[ri].uid, uid);
+            JsonDocument row;
+            row["type"]   = "cmd";   row["action"] = "sd_race_save_row";
+            row["slot"]   = s;
+            row["name"]   = (ri >= 0 && ri < rosterCount) ? roster[ri].name : "---";
+            row["uid"]    = uid;     row["lap"]    = lapNo;
+            row["lapMs"]  = laps[s_dumpIdx].lapTimeMs;
+            row["rssi"]   = laps[s_dumpIdx].rssi;
+            row["ts"]     = laps[s_dumpIdx].timestamp;
+            serializeJson(row, Serial1); Serial1.print('\n');
+            s_dumpIdx++;
+        } else {
+            sendGateCmd("sd_race_save_end");
+            lapCount = 0;            // cleared only after the dump completes
+            s_dumpState = DUMP_IDLE;
+        }
+        return;
+    }
+
+    if (s_dumpState == DUMP_BACKUP) {
+        uint32_t gap = (s_dumpIdx == 0) ? DUMP_BEGIN_GAP_MS : DUMP_BACKUP_ROW_GAP_MS;
+        if (now - s_dumpStepMs < gap) return;
+        s_dumpStepMs = now;
+        if (s_dumpIdx < rosterCount) {
+            JsonDocument row;
+            row["type"]  = "cmd";   row["action"] = "sd_backup_row";
+            row["name"]  = roster[s_dumpIdx].name;  row["yomi"] = roster[s_dumpIdx].yomi;
+            char u[18];
+            if (roster[s_dumpIdx].hasUid) uidToStr(roster[s_dumpIdx].uid, u); else u[0] = '\0';
+            row["mac"]   = u;
+            row["enter"] = rosterCal[s_dumpIdx].enterRssi;
+            row["exit"]  = rosterCal[s_dumpIdx].exitRssi;
+            int slot = -1;
+            for (int s = 0; s < MAX_ACTIVE; s++) { if (activePilots[s] == s_dumpIdx) { slot = s; break; } }
+            row["slot"]  = slot;
+            serializeJson(row, Serial1); Serial1.print('\n');
+            s_dumpIdx++;
+        } else {
+            sendGateCmd("sd_end_backup");
+            s_dumpState = DUMP_IDLE;
+        }
+        return;
+    }
+}
+
 // Minimal JSON string-body escaper (handles ", \\ and control chars).
 // UTF-8 multibyte sequences (Japanese names) pass through unchanged.
 static void jsonEscape(const char* src, char* dst, size_t dstSize) {
@@ -195,7 +286,6 @@ void processGateLine(const String& line) {
         int s = doc["pilot"] | -1;
         if (s < 0 || s >= MAX_ACTIVE) return;
         rt[s].rssi     = doc["rssi"]     | -120;
-        rt[s].rawRssi  = doc["raw"]      | -120;
         rt[s].crossing = doc["crossing"] | false;
         rt[s].signal   = doc["signal"]   | false;
         rt[s].lastTs   = doc["ts"]       | 0u;
@@ -203,8 +293,8 @@ void processGateLine(const String& line) {
         jsonEscape(activeName(s), nameEsc, sizeof(nameEsc));
         char wm[200];
         snprintf(wm, sizeof(wm),
-                 R"({"type":"rssi","pilot":%d,"name":"%s","rssi":%d,"raw":%d,"crossing":%s,"signal":%s,"ts":%lu})",
-                 s, nameEsc, rt[s].rssi, rt[s].rawRssi,
+                 R"({"type":"rssi","pilot":%d,"name":"%s","rssi":%d,"crossing":%s,"signal":%s,"ts":%lu})",
+                 s, nameEsc, rt[s].rssi,
                  rt[s].crossing ? "true" : "false",
                  rt[s].signal   ? "true" : "false",
                  (unsigned long)rt[s].lastTs);
@@ -231,6 +321,13 @@ void processGateLine(const String& line) {
             lapMs = ts - rt[s].lastLapTs;
         } else if (gateRaceStartTs > 0) {
             lapMs = ts - gateRaceStartTs;
+        }
+        // Guard against a gate reboot mid-race: its `ts` restarts near 0 while
+        // lastLapTs/gateRaceStartTs are large, so the unsigned subtraction yields
+        // a bogus multi-day lap. Discard implausible laps (re-anchor on this ts).
+        if (lapMs > LAP_MS_MAX) {
+            rt[s].lastLapTs = ts;
+            return;
         }
         rt[s].lastLapTs = ts;
 
