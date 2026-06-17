@@ -13,7 +13,6 @@ struct SxRadio {
     SPIClass *spi;          // shared bus
     uint8_t   nss, busy, dio1, rst;
     const char *tag;        // "A"/"B" for logs
-    int8_t    lastRssi;
     uint16_t  busyStuckCount;
 };
 
@@ -37,9 +36,6 @@ uint8_t sxReadPayload(SxRadio &r, uint8_t *buf, uint8_t maxLen);
 
 // Read the RSSI (dBm, negative) of the most recently received packet.
 int8_t sxReadRssiNow(SxRadio &r);
-
-// Last value returned by sxReadRssiNow().
-int8_t sxReadRssi(SxRadio &r);
 
 // True when this radio has hung (BUSY stuck HIGH long enough).
 bool sxNeedsRecovery(SxRadio &r);

@@ -15,7 +15,6 @@
 #include <Arduino.h>
 
 // ---- SX1280 command opcodes ----
-#define SX_CMD_GET_STATUS          0xC0
 #define SX_CMD_GET_RX_BUFFER_STS   0x17
 #define SX_CMD_READ_BUFFER         0x1B
 #define SX_CMD_SET_STANDBY         0x80
@@ -194,7 +193,6 @@ bool sxBegin(SxRadio &r, SPIClass *spi,
     r.spi = spi;
     r.nss = nss; r.busy = busy; r.dio1 = dio1; r.rst = rst;
     r.tag = tag;
-    r.lastRssi = -127;
     r.busyStuckCount = 0;
 
     pinMode(r.nss,  OUTPUT); digitalWrite(r.nss, HIGH);
@@ -258,15 +256,12 @@ void sxSetFrequencyHz(SxRadio &r, uint32_t freqHz) {
     writeCmd(r, SX_CMD_SET_RX, rxParams, 3);
 }
 
-int8_t sxReadRssi(SxRadio &r) { return r.lastRssi; }
-
 int8_t sxReadRssiNow(SxRadio &r) {
     // GetPacketStatus (LoRa): after the discarded status byte the response is
     // [rssiSync, snr, ...].  dBm = -(rssiSync / 2).
     uint8_t ps[2] = {};
     readCmd(r, SX_CMD_GET_PKT_STATUS, ps, 2);
-    r.lastRssi = -(int8_t)(ps[0] / 2);
-    return r.lastRssi;
+    return -(int8_t)(ps[0] / 2);
 }
 
 uint8_t sxReadPayload(SxRadio &r, uint8_t *buf, uint8_t maxLen) {

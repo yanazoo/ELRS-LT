@@ -60,8 +60,7 @@ static int8_t   s_tlmRssiMax     = RSSI_FLOOR_DBM;  // max telemetry RSSI this r
 static uint8_t  s_tlmIntervalCnt = 0;               // telemetry packets this report interval
 static int8_t   s_envRssi        = RSSI_FLOOR_DBM;  // envelope-follower output (reported)
 static uint32_t s_lastUidSyncMs  = 0;               // last own-UID SYNC (UID gate)
-static uint32_t s_silenceMs      = TLM_SILENCE_DEFAULT_MS;  // diag (telemetry ratio)
-static uint8_t  s_tlmDenom       = 0;               // telemetry ratio denominator (0=unknown)
+static uint8_t  s_tlmDenom       = 0;               // telemetry ratio denominator from SYNC (diag, 0=unknown)
 
 // SYNC byte[3] bits[3:1] index -> denominator (1:N).  0=off 1=1:128 .. 7=1:2
 static const uint8_t TLM_DENOM_LUT[8] = { 0, 128, 64, 32, 16, 8, 4, 2 };
@@ -374,13 +373,7 @@ static void handlePacket(SxRadio &r, bool phaseAnchor) {
 #endif
         uint8_t tlmIdx = (buf[OTA_SYNC_TLMRATIO_BYTE] >> OTA_SYNC_TLMRATIO_SHIFT) & OTA_SYNC_TLMRATIO_MASK;
         uint8_t denom  = TLM_DENOM_LUT[tlmIdx];
-        if (denom >= 2) {
-            s_tlmDenom = denom;
-            uint32_t to = ((uint32_t)denom * ELRS_SLOT_US / 1000) * TLM_SILENCE_MARGIN;
-            if (to < TLM_SILENCE_MIN_MS) to = TLM_SILENCE_MIN_MS;
-            if (to > TLM_SILENCE_MAX_MS) to = TLM_SILENCE_MAX_MS;
-            s_silenceMs = to;
-        }
+        if (denom >= 2) s_tlmDenom = denom;   // diagnostic: report the 1:N ratio
     }
 }
 
@@ -406,10 +399,10 @@ static void maybeReport(uint32_t now) {
 static void maybeDebugLog(uint32_t now) {
     if (now - s_tlmLogMs < 1000) return;
     const char *mode = (s_tlmPktCount > 0) ? "TLM" : "idle";
-    Serial.printf("[gate_ep1d] pkts=%u sync=%u/s lq=%u mode=%s tlm/s=%u t0=%u t2=%u t3=%u ratio=1:%u hold=%ums\n",
+    Serial.printf("[gate_ep1d] pkts=%u sync=%u/s lq=%u mode=%s tlm/s=%u t0=%u t2=%u t3=%u ratio=1:%u\n",
                   (unsigned)s_pktCount, (unsigned)s_syncCount, (unsigned)lqPct(), mode,
                   (unsigned)s_tlmPktCount, (unsigned)s_rawType[0], (unsigned)s_rawType[2],
-                  (unsigned)s_rawType[3], (unsigned)s_tlmDenom, (unsigned)s_silenceMs);
+                  (unsigned)s_rawType[3], (unsigned)s_tlmDenom);
     s_pktCount = 0; s_tlmPktCount = 0; s_syncCount = 0;
     s_rawType[0] = s_rawType[1] = s_rawType[2] = s_rawType[3] = 0;
     s_tlmLogMs = now;
@@ -577,4 +570,11 @@ void loop() {
         break;
     }
     }
+
+    // Feed core-1's IDLE task once per iteration so the Task Watchdog does not
+    // fire ("IDLE1 did not reset").  ESP32 yield() only switches to equal/higher
+    // priority tasks, never the lower-priority idle task, so the continuous
+    // busy-poll in SCAN/FOLLOW needs a real (1-tick) block here.  Between dwells
+    // both radios sit in continuous RX, so this 1 ms costs no telemetry.
+    delay(1);
 }

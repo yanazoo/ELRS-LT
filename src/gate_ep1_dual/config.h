@@ -101,15 +101,10 @@
 
 // ---- Telemetry (drone) isolation by OTA type (ELRS 3.6.3) ----
 // The drone's telemetry uplink is OTA type 0b11 (PACKET_TYPE_TLM); the TX only
-// sends RC=0b00 / MSP=0b01 / SYNC=0b10.  type 0b11 alone identifies the drone.
-// We hold the latest telemetry RSSI and fall to the floor only after a "silence"
-// window scaled to the telemetry ratio (read from SYNC):
-//   silence = (denom * ELRS_SLOT_US / 1000) * TLM_SILENCE_MARGIN, clamped.
-// telemetry interval per ratio @500Hz: 1:8=16ms 1:16=32 1:32=64 1:64=128 1:128=256.
-#define TLM_SILENCE_MARGIN      3   // hold timeout = telemetry interval x this
-#define TLM_SILENCE_MIN_MS    120   // floor for low ratios (responsive drop-out)
-#define TLM_SILENCE_MAX_MS    600   // cap for 1:128 (~256 ms interval)
-#define TLM_SILENCE_DEFAULT_MS 300  // used until the first SYNC reveals the ratio
+// sends RC=0b00 / MSP=0b01 / SYNC=0b10.  type 0b11 alone identifies the drone,
+// so RSSI for lap timing is read only from those packets.  The trace is governed
+// by the envelope follower (below) + the UID gate; the telemetry ratio read from
+// SYNC is logged for diagnostics (telemetry interval @500Hz: 1:8=16ms ... 1:128=256ms).
 
 // ---- Reported RSSI floor ----
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
@@ -129,7 +124,6 @@
 // ---- ELRS OTA sync-channel auto-discovery ----
 // Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
 // Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
-#define SYNC_CHANNEL_IDX        41
 #define SYNC_FREQ_HZ            2441400000UL
 
 // ELRS 3.x 8-byte OTA packet layout (verified from OTA.h + rx_main.cpp):
