@@ -331,8 +331,8 @@ function updateScanList(){
     var exitDef=Math.max(-120,Math.min(-1,enterDef-5));
     return '<div id="scan-'+macId+'" style="background:var(--sf2);border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:8px">'
       +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-      +  '<span style="font-family:monospace;font-size:13px;color:var(--accent);flex:1">'+mac+'</span>'
-      +  '<span style="color:var(--muted);font-size:11px">'+s.rssi+' dBm</span>'
+      +  '<span style="font-family:monospace;font-size:13px;color:var(--accent);flex:1">'+esc(mac)+'</span>'
+      +  '<span style="color:var(--muted);font-size:11px">'+esc(s.rssi)+' dBm</span>'
       +  (done?'<span style="color:var(--ok);font-size:11px;font-weight:700">✓ 登録済み</span>':'')
       +'</div>'
       +'<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px">'
