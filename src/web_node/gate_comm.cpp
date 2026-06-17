@@ -25,6 +25,31 @@ int         scanMacCount = 0;
 // Laps longer than this are treated as gate-reboot artifacts (see processGateLine).
 #define LAP_MS_MAX 600000UL   // 10 minutes
 
+// ── Outbound UART line queue (paced, non-blocking) ────────────────────────────
+// Every gate-bound command line goes through this ring buffer instead of being
+// written to Serial1 with delay()-pacing on the caller's task. Producers (HTTP
+// handlers on the AsyncTCP task AND the main loop) enqueue under a short critical
+// section; the single consumer (uartFlushQueue, from loop()) emits one line per
+// TXQ_GAP_MS so the gate's line parser is never flooded. Nothing blocks a task.
+#define TXQ_N      48
+#define TXQ_LINE   192
+#define TXQ_GAP_MS 15
+static portMUX_TYPE s_txqMux = portMUX_INITIALIZER_UNLOCKED;
+static char         s_txq[TXQ_N][TXQ_LINE];
+static volatile int s_txqHead = 0, s_txqTail = 0;
+static uint32_t     s_txqLastMs = 0;
+
+void gateEnqueueLine(const char* line) {
+    portENTER_CRITICAL(&s_txqMux);
+    int next = (s_txqHead + 1) % TXQ_N;
+    if (next != s_txqTail) {                 // drop if full (cmds are idempotent / resent)
+        strncpy(s_txq[s_txqHead], line, TXQ_LINE - 1);
+        s_txq[s_txqHead][TXQ_LINE - 1] = '\0';
+        s_txqHead = next;
+    }
+    portEXIT_CRITICAL(&s_txqMux);
+}
+
 // ── Deferred, non-blocking gate dumps ─────────────────────────────────────────
 // The race-CSV and pilot-backup dumps stream many UART lines and previously paced
 // them with delay() inside the HTTP request handler — i.e. on the AsyncTCP task,
@@ -48,12 +73,12 @@ void runDeferredGateTasks() {
     if (s_dumpState == DUMP_IDLE) {
         if (gReqRaceSave) {
             gReqRaceSave = false;
-            sendGateCmd("sd_race_save_begin");
+            Serial1.println(R"({"type":"cmd","action":"sd_race_save_begin"})");
             for (int s = 0; s < MAX_ACTIVE; s++) s_dumpPerSlot[s] = 0;
             s_dumpIdx = 0; s_dumpStepMs = now; s_dumpState = DUMP_RACE;
         } else if (gReqPilotsBackup) {
             gReqPilotsBackup = false;
-            sendGateCmd("sd_begin_backup");
+            Serial1.println(R"({"type":"cmd","action":"sd_begin_backup"})");
             s_dumpIdx = 0; s_dumpStepMs = now; s_dumpState = DUMP_BACKUP;
         }
         return;
@@ -80,7 +105,7 @@ void runDeferredGateTasks() {
             serializeJson(row, Serial1); Serial1.print('\n');
             s_dumpIdx++;
         } else {
-            sendGateCmd("sd_race_save_end");
+            Serial1.println(R"({"type":"cmd","action":"sd_race_save_end"})");
             lapCount = 0;            // cleared only after the dump completes
             s_dumpState = DUMP_IDLE;
         }
@@ -106,11 +131,23 @@ void runDeferredGateTasks() {
             serializeJson(row, Serial1); Serial1.print('\n');
             s_dumpIdx++;
         } else {
-            sendGateCmd("sd_end_backup");
+            Serial1.println(R"({"type":"cmd","action":"sd_end_backup"})");
             s_dumpState = DUMP_IDLE;
         }
         return;
     }
+}
+
+// Emit at most one queued line per TXQ_GAP_MS, and only while no SD dump owns the
+// UART (the dump writes directly + in order above; flushing resumes when it ends).
+void uartFlushQueue() {
+    if (s_dumpState != DUMP_IDLE) return;
+    if (s_txqHead == s_txqTail) return;
+    uint32_t now = millis();
+    if (now - s_txqLastMs < TXQ_GAP_MS) return;
+    s_txqLastMs = now;
+    Serial1.println(s_txq[s_txqTail]);
+    s_txqTail = (s_txqTail + 1) % TXQ_N;
 }
 
 // Minimal JSON string-body escaper (handles ", \\ and control chars).
@@ -159,7 +196,7 @@ void sendEp1ProvisionForSlot(int slot) {
     snprintf(buf, sizeof(buf),
              R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
              slotEp1Mac[slot], uid);
-    Serial1.println(buf);
+    gateEnqueueLine(buf);
     Serial.printf("[Web] auto-provision slot=%d ep1=%s uid=%s\n", slot, slotEp1Mac[slot], uid);
 }
 
@@ -170,19 +207,19 @@ void sendAllEp1Provisions() {
 void sendGateCooldown() {
     char buf[64];
     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"set_cooldown","ms":%lu})", (unsigned long)cooldownMs);
-    Serial1.println(buf);
+    gateEnqueueLine(buf);
 }
 
 void sendGateSdLogMode() {
     char buf[64];
     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"set_sd_log_mode","mode":%u})", (unsigned)sdLogMode);
-    Serial1.println(buf);
+    gateEnqueueLine(buf);
 }
 
 void sendGateCmd(const char* action) {
     char buf[64];
     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"%s"})", action);
-    Serial1.println(buf);
+    gateEnqueueLine(buf);
 }
 
 void sendGatePilot(int slot) {
@@ -199,9 +236,9 @@ void sendGatePilot(int slot) {
         doc["uid"]  = uid;
         doc["name"] = roster[ri].name;
     }
-    serializeJson(doc, Serial1);
-    Serial1.print('\n');
-    delay(30);
+    char buf[160];
+    serializeJson(doc, buf, sizeof(buf));
+    gateEnqueueLine(buf);
     sendEp1ProvisionForSlot(slot);
 }
 
@@ -213,7 +250,7 @@ void sendGateThreshold(int slot) {
     snprintf(buf, sizeof(buf),
              R"({"type":"cmd","action":"set_threshold","pilot":%d,"enter":%d,"exit":%d})",
              slot, enter, exit_);
-    Serial1.println(buf);
+    gateEnqueueLine(buf);
 }
 
 void sendAllPilots() {
@@ -221,7 +258,7 @@ void sendAllPilots() {
 }
 
 void sendAllThresholds() {
-    for (int s = 0; s < MAX_ACTIVE; s++) { sendGateThreshold(s); delay(30); }
+    for (int s = 0; s < MAX_ACTIVE; s++) { sendGateThreshold(s); }
 }
 
 void processGateLine(const String& line) {

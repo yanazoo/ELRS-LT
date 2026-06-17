@@ -264,7 +264,7 @@ void registerHttpRoutes() {
             char buf[64];
             snprintf(buf,sizeof(buf),R"({"type":"cmd","action":"sd_poll","enable":%s})",
                      enable?"true":"false");
-            Serial1.println(buf);
+            gateEnqueueLine(buf);
             req->send(200);
         });
 
@@ -306,7 +306,7 @@ void registerHttpRoutes() {
                     if (!strlen(path)) { req2->send(400,"application/json",R"({"error":"no path"})"); return; }
                     char buf[128];
                     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"sd_read_file","path":"%s"})", path);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });
@@ -325,7 +325,7 @@ void registerHttpRoutes() {
                     if (!strlen(path)) { req2->send(400,"application/json",R"({"error":"no path"})"); return; }
                     char buf[128];
                     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"sd_delete_file","path":"%s"})", path);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });
@@ -412,7 +412,7 @@ void registerHttpRoutes() {
                     snprintf(buf, sizeof(buf),
                              R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
                              mac, uid);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });

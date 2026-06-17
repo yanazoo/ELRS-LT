@@ -18,3 +18,9 @@ void sendAllEp1Provisions();
 extern volatile bool gReqRaceSave;
 extern volatile bool gReqPilotsBackup;
 void runDeferredGateTasks();
+
+// Thread-safe outbound UART line queue. Producers (async HTTP handlers AND the
+// main loop) enqueue a complete command line; uartFlushQueue() (called from
+// loop()) paces them out so no task ever blocks on Serial1.
+void gateEnqueueLine(const char* line);
+void uartFlushQueue();
