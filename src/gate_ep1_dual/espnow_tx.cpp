@@ -43,25 +43,32 @@ static void onRecv(const uint8_t *mac, const uint8_t *data, int len) {
 
 // Keep the radio pinned to the Gate Node's channel and the broadcast peer alive.
 static void ensureChannelAndPeer() {
-    uint8_t ch; wifi_second_chan_t sc;
+    uint8_t ch = 0; wifi_second_chan_t sc;
     if (esp_wifi_get_channel(&ch, &sc) == ESP_OK && ch != ESPNOW_CHANNEL) {
+        esp_wifi_set_promiscuous(true);
         esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        esp_wifi_set_promiscuous(false);
     }
     if (!esp_now_is_peer_exist(BCAST_MAC)) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, BCAST_MAC, 6);
         peer.channel = ESPNOW_CHANNEL;
+        peer.ifidx   = WIFI_IF_STA;
         peer.encrypt = false;
         esp_now_add_peer(&peer);
     }
 }
 
 bool espnowBegin() {
-    // STA mode, no AP association (association would pull us off ESPNOW_CHANNEL).
+    // Match the proven ESP8266 sniffer path: STA, no persistence, no auto-
+    // reconnect — so the radio never associates to a saved AP and hops off
+    // ESPNOW_CHANNEL.  (Arduino WiFi defaults to FLASH storage + autoreconnect,
+    // which is the usual reason an ESP32 ESP-NOW node "can't reach" its peer.)
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
+    WiFi.disconnect(false, true);   // drop any link + erase stored AP creds
+    WiFi.setAutoReconnect(false);
     esp_wifi_set_ps(WIFI_PS_NONE);
-    esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
     if (esp_now_init() != ESP_OK) {
         Serial.println("[espnow] init failed");
@@ -69,18 +76,28 @@ bool espnowBegin() {
     }
     esp_now_register_recv_cb(onRecv);
 
+    // Pin the channel.  When the STA is NOT associated to an AP, esp_wifi_set_
+    // channel only "sticks" while promiscuous mode is enabled — without this the
+    // node can sit on the wrong channel and never hear/reach the Gate Node.
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_promiscuous(false);
+
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BCAST_MAC, 6);
     peer.channel = ESPNOW_CHANNEL;
+    peer.ifidx   = WIFI_IF_STA;     // send on the STA interface
     peer.encrypt = false;
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("[espnow] add_peer(broadcast) failed");
     }
 
+    uint8_t ch = 0; wifi_second_chan_t sc;
+    esp_wifi_get_channel(&ch, &sc);
     uint8_t mac[6];
     WiFi.macAddress(mac);
-    Serial.printf("[espnow] up ch=%d, my MAC=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                  ESPNOW_CHANNEL, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    Serial.printf("[espnow] up ch=%u (want %d) MAC=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                  (unsigned)ch, ESPNOW_CHANNEL, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return true;
 }
 
