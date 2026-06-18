@@ -423,7 +423,14 @@ static void maybeDebugLog(uint32_t now) {
 void setup() {
     Serial.begin(115200);
     delay(50);
-    rgbLedWrite(PIN_LED, 0, 0, 0);     // WS2812 off (RMT init on first call)
+    // LED self-test FIRST — before radios / ESP-NOW — so the WS2812 on GPIO22 is
+    // proven even if a later init step misbehaves: a bright red→green→blue flash
+    // on every boot. If you see NO flash at all, the unit is not running this code
+    // (still boot-looping) or the LED is wired to a different pin.
+    rgbLedWrite(PIN_LED, 120, 0, 0); delay(250);
+    rgbLedWrite(PIN_LED, 0, 120, 0); delay(250);
+    rgbLedWrite(PIN_LED, 0, 0, 120); delay(250);
+    rgbLedWrite(PIN_LED, 0, 0, 0);
     Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
 #ifndef BRINGUP_UID
     Serial.println(F("[gate_ep1d] awaiting UID (auto-discover / UART / ESP-NOW)"));
