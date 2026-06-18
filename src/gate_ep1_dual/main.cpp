@@ -333,7 +333,7 @@ static void updateLedHeartbeat() {
     uint8_t cr = on ? r : 0, cg = on ? g : 0, cb = on ? b : 0;
     static uint8_t lr = 1, lg = 1, lb = 1;   // force first write
     if (cr != lr || cg != lg || cb != lb) {
-        neopixelWrite(PIN_LED, cr, cg, cb);
+        rgbLedWrite(PIN_LED, cr, cg, cb);
         lr = cr; lg = cg; lb = cb;
     }
 }
@@ -423,7 +423,7 @@ static void maybeDebugLog(uint32_t now) {
 void setup() {
     Serial.begin(115200);
     delay(50);
-    neopixelWrite(PIN_LED, 0, 0, 0);   // WS2812 off (RMT init on first call)
+    rgbLedWrite(PIN_LED, 0, 0, 0);     // WS2812 off (RMT init on first call)
     Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
 #ifndef BRINGUP_UID
     Serial.println(F("[gate_ep1d] awaiting UID (auto-discover / UART / ESP-NOW)"));
