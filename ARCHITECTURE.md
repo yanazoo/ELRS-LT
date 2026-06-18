@@ -256,7 +256,7 @@ RX ドウェル + RSSI読み    残り約 3 ms に収まる   -> OK
 
 - **Radio A** がドウェル前半に現chでSYNCを拾い、`fhssIndex+nonce` で位相・hopIndex・
   テレメトリ比率を固定（`SYNC_PHASE_ALIGN`）。最終slotで次chへ先回りするので、
-  境界時にAのリチューンは critical path に乗らない。SCAN・auto-discovery・再同期もAが担当。
+  境界時にAのリチューンは critical path に乗らない。SCAN・再同期もAが担当。
 - **Radio B** は現chにドウェル全体＋`TAIL_LINGER_US` だけ境界の先まで駐留し、
   **Aがリチューンで聞けない末尾のテレメトリslotをカバー**。RSSIはここで読む。
 - ELRS ではダウンリンクとテレメトリ uplink は**同じch**なので、両者を現chに重ねて

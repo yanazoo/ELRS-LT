@@ -8,14 +8,15 @@
 //   Radio A (g_a) — SYNC/phase anchor.  Holds the current channel early in each
 //                   dwell to capture SYNC (UID/phase/ratio), then moves to the
 //                   NEXT channel for the final slot so it is already listening at
-//                   the hop boundary.  Owns SCAN, auto-discovery and re-sync.
+//                   the hop boundary.  Owns SCAN and re-sync.
 //   Radio B (g_b) — telemetry capture.  Stays on the current channel for the
 //                   whole dwell and lingers past the hop boundary, so the rare
 //                   telemetry slot (1 per 256 ms at 1:128) is never lost to a
 //                   retune blind spot.  RSSI for lap timing is read here.
 //
-// Provisioning (priority order): BRINGUP_UID compile define / ESP-NOW from Gate
-// Node / UART "UID AABBCCDDEEFF" / auto-discovery from OTA SYNC packets.
+// Provisioning: the UID is received from the Gate Node over ESP-NOW (normal
+// path), or a UART "UID AABBCCDDEEFF" line, or a compile-time BRINGUP_UID for
+// bench tests. There is no standalone over-the-air UID auto-discovery.
 
 #include <Arduino.h>
 #include "config.h"
@@ -93,118 +94,10 @@ static uint8_t lqPct() { return (uint8_t)((s_lqSum * 100U) / LQ_WINDOW); }
 
 static void lqReset() { s_lqHead = 0; s_lqSum = 0; memset(s_lqBuf, 0, sizeof(s_lqBuf)); }
 
-// ---- Auto-discovery (radio A only) ----
-#ifndef BRINGUP_UID
-enum AutoPhase { AUTO_SYNC_WAIT, AUTO_HOP_SCAN, AUTO_BRUTE_FORCE, AUTO_DONE };
-struct AutoGotObs { uint16_t hopOffset; uint8_t channel; };
-static struct {
-    AutoPhase  phase;
-    bool       syncParked;
-    uint8_t    uid3, uid4, uid5hi, syncFhssIdx;
-    AutoGotObs obs[AUTO_MAX_GOT_OBS];
-    uint8_t    obsCount;
-    uint16_t   hopOffset;
-    uint8_t    scanChan;
-    uint32_t   dwellEnd;
-} s_auto;
-
-static void autoReset() { memset(&s_auto, 0, sizeof(s_auto)); }
-
-static bool autoBruteForce() {
-    if (s_auto.obsCount == 0) return false;
-    uint8_t foundU2 = 0, foundU5lo = 0, matchCount = 0;
-    for (uint32_t idx = 0; idx < AUTO_CANDIDATE_COUNT; idx++) {
-        if (s_newProvision) return false;
-        uint8_t  uid2   = (uint8_t)(idx >> 6);
-        uint8_t  uid5lo = (uint8_t)(idx & 0x3F);
-        uint8_t  uid5   = s_auto.uid5hi | uid5lo;
-        uint32_t seed   = ((uint32_t)uid2        << 24)
-                        | ((uint32_t)s_auto.uid3 << 16)
-                        | ((uint32_t)s_auto.uid4 <<  8)
-                        | ((uint32_t)(uid5 ^ 3));
-        bool ok = true;
-        for (uint8_t o = 0; o < s_auto.obsCount; o++) {
-            uint16_t hopIdx = (uint16_t)(
-                ((uint32_t)s_auto.syncFhssIdx + 1u + s_auto.obs[o].hopOffset)
-                % FHSS_SEQUENCE_LEN);
-            if (fhssChannelFromSeed(seed, hopIdx) != s_auto.obs[o].channel) { ok = false; break; }
-        }
-        if (ok) { foundU2 = uid2; foundU5lo = uid5lo; matchCount++; }
-        if ((idx & 0x7Fu) == 0x7Fu) yield();
-    }
-    if (matchCount != 1) {
-        Serial.printf("[gate_ep1d] auto: %u candidates (need 1)\n", (unsigned)matchCount);
-        return false;
-    }
-    uint8_t uid5 = s_auto.uid5hi | foundU5lo;
-    ident.uid[0] = 0x00; ident.uid[1] = 0x00;
-    ident.uid[2] = foundU2; ident.uid[3] = s_auto.uid3;
-    ident.uid[4] = s_auto.uid4; ident.uid[5] = uid5;
-    ident.valid = true;
-    Serial.printf("[gate_ep1d] auto-discovered uid=[00:00:%02X:%02X:%02X:%02X]\n",
-                  foundU2, s_auto.uid3, s_auto.uid4, uid5);
-    return true;
-}
-
-static void autoStep() {
-    switch (s_auto.phase) {
-    case AUTO_SYNC_WAIT:
-        if (!s_auto.syncParked) {
-            sxSetFrequencyHz(g_a, SYNC_FREQ_HZ);
-            s_auto.syncParked = true;
-            Serial.println(F("[gate_ep1d] auto: parking sync ch41"));
-        }
-        if (sxPacketReceived(g_a)) {
-            uint8_t buf[8] = {};
-            sxReadPayload(g_a, buf, 8);
-            if ((buf[0] & OTA_TYPE_MASK) != OTA_TYPE_SYNC) break;
-            s_auto.syncFhssIdx = buf[OTA_SYNC_FHSS_BYTE];
-            s_auto.uid3   = buf[OTA_SYNC_UID3_BYTE];
-            s_auto.uid4   = buf[OTA_SYNC_UID4_BYTE];
-            s_auto.uid5hi = buf[OTA_SYNC_UID5_BYTE] & OTA_SYNC_UID5_HIBITS;
-            s_auto.obsCount = 0; s_auto.hopOffset = 0; s_auto.scanChan = 0; s_auto.dwellEnd = 0;
-            s_auto.phase = AUTO_HOP_SCAN;
-            Serial.printf("[gate_ep1d] auto: sync fhssIdx=%u uid3=%02X uid4=%02X uid5hi=%02X\n",
-                          (unsigned)s_auto.syncFhssIdx, s_auto.uid3, s_auto.uid4, s_auto.uid5hi);
-        }
-        break;
-    case AUTO_HOP_SCAN:
-        if (s_auto.dwellEnd == 0) {
-            sxSetFrequencyHz(g_a, fhssFreqHz(s_auto.scanChan));
-            s_auto.dwellEnd = micros() + (uint32_t)ELRS_SLOT_US * FHSS_HOP_INTERVAL;
-        }
-        if ((int32_t)(s_auto.dwellEnd - micros()) > 0) {
-            if (sxPacketReceived(g_a) && s_auto.obsCount < AUTO_MAX_GOT_OBS) {
-                s_auto.obs[s_auto.obsCount].hopOffset = s_auto.hopOffset;
-                s_auto.obs[s_auto.obsCount].channel   = s_auto.scanChan;
-                s_auto.obsCount++;
-                Serial.printf("[gate_ep1d] auto: hit %u hop=%u ch=%u\n",
-                              (unsigned)s_auto.obsCount, (unsigned)s_auto.hopOffset,
-                              (unsigned)s_auto.scanChan);
-            }
-            yield();
-            return;
-        }
-        s_auto.dwellEnd = 0;
-        s_auto.scanChan = (uint8_t)((s_auto.scanChan + 1u) % FHSS_CHANNEL_COUNT);
-        s_auto.hopOffset++;
-        if (s_auto.hopOffset >= AUTO_SCAN_HOPS) {
-            s_auto.phase = AUTO_BRUTE_FORCE;
-            Serial.printf("[gate_ep1d] auto: scan done hits=%u -> brute-force\n",
-                          (unsigned)s_auto.obsCount);
-        }
-        break;
-    case AUTO_BRUTE_FORCE:
-        Serial.println(F("[gate_ep1d] auto: brute-force..."));
-        if (autoBruteForce()) s_auto.phase = AUTO_DONE;
-        else { autoReset(); Serial.println(F("[gate_ep1d] auto: retry")); }
-        break;
-    case AUTO_DONE: break;
-    }
-}
-#endif // !BRINGUP_UID
-
 // ---- Provisioning ----
+// UID comes from the Gate Node over ESP-NOW (normal path) or a UART
+// "UID AABBCCDDEEFF" line (dev fallback), or a compile-time BRINGUP_UID.
+// There is no standalone over-the-air UID auto-discovery on the dual node.
 static void onProvision(const uint8_t uid[6]) {
     memcpy(s_pendingUid, uid, 6);
     s_newProvision = true;
@@ -237,9 +130,6 @@ static void applyProvision() {
         ident.valid = false;
         state = ST_PROVISION;
         Serial.println(F("[gate_ep1d] UID cleared -> PROVISION"));
-#ifndef BRINGUP_UID
-        autoReset();
-#endif
     }
 }
 
@@ -426,7 +316,7 @@ void setup() {
     rgbLedWrite(PIN_LED, 0, 0, 0);     // WS2812 off (RMT init on first call)
     Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
 #ifndef BRINGUP_UID
-    Serial.println(F("[gate_ep1d] awaiting UID (auto-discover / UART / ESP-NOW)"));
+    Serial.println(F("[gate_ep1d] awaiting UID from Gate Node (ESP-NOW / UART)"));
 #endif
 
     sxBusBegin(&g_spi);
@@ -439,9 +329,6 @@ void setup() {
     espnowSetProvisionCallback(onProvision);
     espnowSendBeacon(ident.uid, ident.valid, (uint8_t)state);
     s_lastBeaconMs = millis();
-#ifndef BRINGUP_UID
-    autoReset();
-#endif
 }
 
 // ---- Per-radio hang recovery ----
@@ -466,9 +353,6 @@ static bool handleRecovery() {
         if (ident.valid) { state = ST_SCAN; Serial.println(F("[gate_ep1d] A recovered -> SCAN")); }
         else {
             state = ST_PROVISION;
-#ifndef BRINGUP_UID
-            autoReset();
-#endif
             Serial.println(F("[gate_ep1d] A recovered -> PROVISION"));
         }
         return true;   // skip this loop iteration's state work
@@ -485,18 +369,9 @@ void loop() {
     switch (state) {
 
     case ST_PROVISION:
-        if (tryProvision()) {
-            startTracking();
-#ifndef BRINGUP_UID
-            autoReset();
-#endif
-        }
-#ifndef BRINGUP_UID
-        else {
-            autoStep();
-            if (s_auto.phase == AUTO_DONE) { startTracking(); autoReset(); }
-        }
-#endif
+        // Wait for a UID from the Gate Node (ESP-NOW, handled in applyProvision)
+        // or a UART line; tryProvision() also applies a compile-time BRINGUP_UID.
+        if (tryProvision()) startTracking();
         break;
 
     case ST_SCAN: {

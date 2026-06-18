@@ -200,7 +200,7 @@ enough to lose the sample.
 
 | Radio | Role | Behavior |
 |---|---|---|
-| **Radio A (sync anchor)** | Watch TX FHSS/SYNC | Holds the current channel early in the dwell to capture SYNC (phase/UID/ratio), then moves ahead to the next channel for the final slot. Also owns SCAN, auto-discovery and re-sync |
+| **Radio A (sync anchor)** | Watch TX FHSS/SYNC | Holds the current channel early in the dwell to capture SYNC (phase/UID/ratio), then moves ahead to the next channel for the final slot. Also owns SCAN and re-sync |
 | **Radio B (telemetry)** | Watch RX TRSS | Stays on the current channel for the whole dwell plus a short overhang past the boundary (tail linger), reading type `0b11` RSSI. Covers the trailing slot Radio A would miss while retuning — **no blind spot** |
 
 Together they cover every slot with no deaf window, so the sparse telemetry is

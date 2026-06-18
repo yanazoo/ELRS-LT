@@ -124,11 +124,7 @@
 // pilot's packets.
 #define UID_GATE_MS        10000
 
-// ---- ELRS OTA sync-channel auto-discovery ----
-// Channel 41 is always position-0 of every FHSS block in ELRS 3.x.
-// Frequency = 2400.4 MHz + 41 × 1 MHz = 2441.4 MHz.
-#define SYNC_FREQ_HZ            2441400000UL
-
+// ---- ELRS OTA packet layout ----
 // ELRS 3.x 8-byte OTA packet layout (verified from OTA.h + rx_main.cpp):
 //   byte[0]: packetType[1:0] | crcHigh[7:2]
 //            0b00=RC_DATA  0b01=MSP  0b10=SYNC  0b11=TLM
@@ -154,12 +150,6 @@
 #define OTA_SYNC_TLMRATIO_BYTE  3
 #define OTA_SYNC_TLMRATIO_SHIFT 1
 #define OTA_SYNC_TLMRATIO_MASK  0x07
-
-// Auto-discovery candidate space (identical to single-radio firmware):
-//   UID[2] (256) × UID[5] lower 6 bits (64) = 16384 candidates.
-#define AUTO_CANDIDATE_COUNT    16384
-#define AUTO_SCAN_HOPS          320
-#define AUTO_MAX_GOT_OBS        8
 
 // ---- ESP-NOW channel (must match Gate Node ESPNOW_CHANNEL) ----
 #define ESPNOW_CHANNEL       1
