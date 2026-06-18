@@ -49,8 +49,11 @@
 #define SXB_PIN_DIO1  34   // input-only GPIO
 #define SXB_PIN_RST   21
 
-// ---- Status LED (verify on your unit; harmless if wrong) ----
-#define PIN_LED       16
+// ---- Status LED ----
+// EP1 Dual uses a WS2812 addressable RGB LED on GPIO22 (GRB order), per the
+// ELRS "Generic 2400 True Diversity PA" target — NOT a plain GPIO LED. It is
+// driven with neopixelWrite() (ESP32 RMT), so digitalWrite() does nothing.
+#define PIN_LED       22
 
 // ---- Optional TCXO control via SX1280 DIO3 ----
 // EP1 *TCXO* boards usually power the TCXO directly (the proven single-radio

@@ -316,15 +316,26 @@ static void maybeSendBeacon() {
     }
 }
 
+// WS2812 RGB heartbeat (GPIO22). Same blink cadence as the single-radio EP1 but
+// colour-coded by state: amber=PROVISION, blue=SCAN, green=FOLLOW. neopixelWrite()
+// is a ~30 us RMT transfer, so we only push on a change, not every loop.
 static void updateLedHeartbeat() {
-    uint32_t t = millis(); bool on;
+    uint32_t t = millis();
+    bool on;
+    uint8_t r = 0, g = 0, b = 0;
     switch (state) {
-    case ST_PROVISION: { uint32_t p = t % 2000; on = (p < 50);  break; }
-    case ST_SCAN:      { uint32_t p = t % 200;  on = (p < 100); break; }
-    case ST_FOLLOW:    { uint32_t p = t % 2000; on = (p < 80) || (p >= 160 && p < 240); break; }
+    case ST_PROVISION: { uint32_t p = t % 2000; on = (p < 50);  r = 60; g = 30; b = 0; break; } // amber
+    case ST_SCAN:      { uint32_t p = t % 200;  on = (p < 100); r = 0;  g = 0;  b = 80; break; } // blue
+    case ST_FOLLOW:    { uint32_t p = t % 2000; on = (p < 80) || (p >= 160 && p < 240);
+                         r = 0;  g = 70; b = 0; break; }                                          // green
     default: on = false;
     }
-    digitalWrite(PIN_LED, on ? HIGH : LOW);
+    uint8_t cr = on ? r : 0, cg = on ? g : 0, cb = on ? b : 0;
+    static uint8_t lr = 1, lg = 1, lb = 1;   // force first write
+    if (cr != lr || cg != lg || cb != lb) {
+        neopixelWrite(PIN_LED, cr, cg, cb);
+        lr = cr; lg = cg; lb = cb;
+    }
 }
 
 // ---- Packet handling (shared by both radios) ----
@@ -412,8 +423,7 @@ static void maybeDebugLog(uint32_t now) {
 void setup() {
     Serial.begin(115200);
     delay(50);
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, LOW);
+    neopixelWrite(PIN_LED, 0, 0, 0);   // WS2812 off (RMT init on first call)
     Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
 #ifndef BRINGUP_UID
     Serial.println(F("[gate_ep1d] awaiting UID (auto-discover / UART / ESP-NOW)"));
