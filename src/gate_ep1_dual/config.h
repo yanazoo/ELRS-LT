@@ -121,6 +121,14 @@
 // little wiggle remains; raise it (e.g. -100) to also show very distant drones.
 #define TLM_RSSI_GATE_DBM   (-90)
 
+// ---- OTA CRC validation (reject CRC-invalid false telemetry) ----
+// Validate each TLM packet against ELRS's own 14-bit OTA CRC so bit-flipped TX
+// packets / noise mis-read as telemetry are dropped (the squelch alone can't
+// catch false samples stronger than TLM_RSSI_GATE_DBM). Self-calibrating and
+// self-testing from SYNC packets — if it can't lock, it safely does nothing.
+// Set to 0 to disable entirely.
+#define VALIDATE_OTA_CRC     1
+
 // ---- Reported RSSI floor ----
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
 
