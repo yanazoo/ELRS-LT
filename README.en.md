@@ -119,8 +119,12 @@ Use a FAT32-formatted microSD card. Race CSVs are auto-saved as
 Requires PlatformIO Core or the PlatformIO IDE (VS Code extension).
 
 ```bash
-# Gate EP1 sniffer (EP1/EP2 TCXO = ESP8285) — flash one per pilot slot (4 total)
+# Gate EP1 sniffer (EP1/EP2 TCXO = ESP8285, single radio) — flash one per pilot slot (4 total)
 pio run -e gate_ep1 -t upload
+
+# Gate EP1 DUAL sniffer (EP1 Dual TCXO = ESP32-PICO-D4 + 2x SX1280)
+# Splits the radios into sync + telemetry roles for reliable capture up to 1:128
+pio run -e gate_ep1_dual -t upload
 
 # Gate Node (ESP32-WROVER-E / LilyGo TTGO T8 V1.8)
 pio run -e gate_node -t upload
@@ -175,6 +179,58 @@ that the drone sends back to its transmitter.
 - **Recommended ratio: 1:2.** It captures densely, holds a steady value at a fixed
   distance, and forms a smooth peak on a pass. High ratios (1:8…1:128) capture sparsely
   and look choppy, so they are not recommended.
+
+---
+
+## EP1 Dual (Dual TCXO) — high-ratio (up to 1:128) variant
+
+The single-radio (ESP8285) build time-shares one SX1280 between *FHSS following*
+and *telemetry capture*, so high ratios (1:8+) capture sparsely. Repurposing a
+**HappyModel EP1 Dual TCXO** (**ESP32-PICO-D4 + 2x SX1280** true-diversity RX)
+splits those two jobs across both radios, making **lap timing work even at a
+telemetry ratio of 1:128**.
+
+### How it works
+
+In ELRS the TX downlink (RC/SYNC) and the drone's telemetry uplink (TRSS) share
+the **same FHSS channel** within a dwell. A single radio drops the rare telemetry
+packet mainly because of the **retune blind spot at each hop boundary** (~0.5–1 ms
+deaf) and **inter-SYNC grid drift**. At 1:128 (~4 packets/s) one collision is
+enough to lose the sample.
+
+| Radio | Role | Behavior |
+|---|---|---|
+| **Radio A (sync anchor)** | Watch TX FHSS/SYNC | Holds the current channel early in the dwell to capture SYNC (phase/UID/ratio), then moves ahead to the next channel for the final slot. Also owns SCAN and re-sync |
+| **Radio B (telemetry)** | Watch RX TRSS | Stays on the current channel for the whole dwell plus a short overhang past the boundary (tail linger), reading type `0b11` RSSI. Covers the trailing slot Radio A would miss while retuning — **no blind spot** |
+
+Together they cover every slot with no deaf window, so the sparse telemetry is
+captured reliably. Per-radio channel tracking avoids redundant retunes, and
+because the two radios use separate antennas, taking the max of their telemetry
+RSSI also yields a true-diversity gain.
+
+### Limitation (honest)
+
+Dual radios improve **capture reliability**, not the **telemetry rate** itself —
+that is fixed by the ratio (1:128 @ 500 Hz = 256 ms between samples). So:
+
+- ✅ **Lap detection becomes solid at 1:128** (no dropped samples)
+- ⚠️ **Lap-time resolution** is still bounded by the sample interval (up to 256 ms)
+
+Ideal for saving uplink airtime at a high ratio while keeping reliable detection;
+for precise lap times a low ratio (1:2–1:8) is still better.
+
+### Wiring (EP1 Dual internal pins — Generic 2400 True Diversity PA / ESP32)
+
+```
+Shared SPI: SCK=GPIO25  MISO=GPIO33  MOSI=GPIO32
+Radio A:    NSS=GPIO27  BUSY=GPIO36  DIO1=GPIO37  RST=GPIO26
+Radio B:    NSS=GPIO13  BUSY=GPIO39  DIO1=GPIO34  RST=GPIO21
+```
+
+> These are the ExpressLRS official-target defaults — **verify on your unit**
+> (PA/RF-switch and LED pins are board specific). Flash it as an ESP32 over
+> UART / Betaflight passthrough. See the dual-radio section of
+> [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ---
 
@@ -386,11 +442,12 @@ Configurable in the Global Settings tab. Default is "name + lap + lap time".
 
 ```
 src/
-├─ gate_ep1/    EP1/EP2 TCXO sniffer firmware (ESP8285) — FHSS following + TRSS isolation
-├─ gate_node/   Gate Node (TTGO T8) — ESP-NOW receive + EMA lap detection
-└─ web_node/    Web Node (XIAO S3) — WiFi AP + race-management UI
-data/           Web UI (LittleFS)
-boards/         custom board definitions
+├─ gate_ep1/       EP1/EP2 TCXO single-radio sniffer firmware (ESP8285) — FHSS following + TRSS isolation
+├─ gate_ep1_dual/  EP1 Dual TCXO dual-radio sniffer firmware (ESP32-PICO-D4 + 2x SX1280)
+├─ gate_node/      Gate Node (TTGO T8) — ESP-NOW receive + EMA lap detection
+└─ web_node/       Web Node (XIAO S3) — WiFi AP + race-management UI
+data/              Web UI (LittleFS)
+boards/            custom board definitions
 ```
 
 See [HANDOFF.md](HANDOFF.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for details.

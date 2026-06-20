@@ -221,43 +221,19 @@ void registerHttpRoutes() {
         // Only write when an SD card is present and logging is not off.
         // Honest status is returned so the UI can say "unsaved" instead of
         // falsely reporting success; the clear still proceeds (as before).
+        //
+        // The actual multi-line UART dump is streamed from loop()
+        // (runDeferredGateTasks) instead of blocking the AsyncTCP task here.
+        // When writing, lapCount is cleared by the deferred task once the dump
+        // finishes; when not writing there is nothing to stream, so clear now.
         bool willSave = sdPresent && sdLogMode != 2;
-        if (willSave) {
-            sendGateCmd("sd_race_save_begin");
-            delay(300);
-            int perSlot[MAX_ACTIVE] = {0};
-            for (int i = 0; i < lapCount; i++) {
-                int s  = laps[i].slot;
-                int ri = laps[i].rosterIdx;
-                int lapNo = (s >= 0 && s < MAX_ACTIVE) ? ++perSlot[s] : 0;
-                char uid[18] = "";
-                if (ri >= 0 && ri < rosterCount && roster[ri].hasUid) uidToStr(roster[ri].uid, uid);
-                JsonDocument row;
-                row["type"]   = "cmd";
-                row["action"] = "sd_race_save_row";
-                row["slot"]   = s;
-                row["name"]   = (ri >= 0 && ri < rosterCount) ? roster[ri].name : "---";
-                row["uid"]    = uid;
-                row["lap"]    = lapNo;
-                row["lapMs"]  = laps[i].lapTimeMs;
-                row["rssi"]   = laps[i].rssi;
-                row["ts"]     = laps[i].timestamp;
-                serializeJson(row, Serial1); Serial1.print('\n');
-                delay(15);
-            }
-            sendGateCmd("sd_race_save_end");
-        }
-        lapCount = 0;
+        if (willSave) gReqRaceSave = true;
+        else          lapCount = 0;
         const char* reason = willSave ? "" : (sdLogMode == 2 ? "off" : "nosd");
         char resp[64];
         snprintf(resp, sizeof(resp), R"({"ok":true,"saved":%s,"reason":"%s"})",
                  willSave ? "true" : "false", reason);
         req->send(200,"application/json",resp);
-    });
-
-    // ── GET /api/laps ─────────────────────────────────────────────────────────
-    server.on("/api/laps", HTTP_GET, [](AsyncWebServerRequest* req) {
-        req->send(200, "application/json", lapsJson());
     });
 
     // ── GET /api/scan / POST /api/scan/clear / POST /api/scan/refresh ─────────
@@ -270,15 +246,6 @@ void registerHttpRoutes() {
     server.on("/api/scan/refresh", HTTP_POST, [](AsyncWebServerRequest* req) {
         sendGateCmd("scan_refresh");
         req->send(200,"application/json",R"({"ok":true})");
-    });
-
-    // ── GET /api/status ───────────────────────────────────────────────────────
-    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
-        JsonDocument doc;
-        doc["raceRunning"] = raceRunning; doc["raceStartMs"] = raceStartMs;
-        doc["lapCount"]    = lapCount;    doc["rosterCount"]  = rosterCount;
-        doc["uptime"]      = millis();    doc["sdPresent"]    = sdPresent;
-        String s; serializeJson(doc,s); req->send(200,"application/json",s);
     });
 
     // ── GET /api/sd/status ────────────────────────────────────────────────────
@@ -297,28 +264,16 @@ void registerHttpRoutes() {
             char buf[64];
             snprintf(buf,sizeof(buf),R"({"type":"cmd","action":"sd_poll","enable":%s})",
                      enable?"true":"false");
-            Serial1.println(buf);
+            gateEnqueueLine(buf);
             req->send(200);
         });
 
     // ── POST /api/sd/pilots/backup ────────────────────────────────────────────
     server.on("/api/sd/pilots/backup", HTTP_POST, [](AsyncWebServerRequest* req) {
         if (!sdPresent) { req->send(503,"application/json",R"({"error":"no sd card"})"); return; }
-        sendGateCmd("sd_begin_backup"); delay(300);
-        for (int i = 0; i < rosterCount; i++) {
-            JsonDocument row;
-            row["type"]  = "cmd"; row["action"] = "sd_backup_row";
-            row["name"]  = roster[i].name; row["yomi"] = roster[i].yomi;
-            char u[18];
-            if (roster[i].hasUid) uidToStr(roster[i].uid, u); else u[0] = '\0';
-            row["mac"]   = u;
-            row["enter"] = rosterCal[i].enterRssi; row["exit"] = rosterCal[i].exitRssi;
-            int slot = -1;
-            for (int s = 0; s < MAX_ACTIVE; s++) { if (activePilots[s] == i) { slot = s; break; } }
-            row["slot"]  = slot;
-            serializeJson(row, Serial1); Serial1.print('\n'); delay(80);
-        }
-        sendGateCmd("sd_end_backup");
+        // Stream the per-pilot rows from loop() (runDeferredGateTasks) instead of
+        // blocking the AsyncTCP task with delay() per row.
+        gReqPilotsBackup = true;
         req->send(200,"application/json",R"({"ok":true})");
     });
 
@@ -351,7 +306,7 @@ void registerHttpRoutes() {
                     if (!strlen(path)) { req2->send(400,"application/json",R"({"error":"no path"})"); return; }
                     char buf[128];
                     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"sd_read_file","path":"%s"})", path);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });
@@ -370,7 +325,7 @@ void registerHttpRoutes() {
                     if (!strlen(path)) { req2->send(400,"application/json",R"({"error":"no path"})"); return; }
                     char buf[128];
                     snprintf(buf, sizeof(buf), R"({"type":"cmd","action":"sd_delete_file","path":"%s"})", path);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });
@@ -457,7 +412,7 @@ void registerHttpRoutes() {
                     snprintf(buf, sizeof(buf),
                              R"({"type":"cmd","action":"provision_ep1","mac":"%s","uid":"%s"})",
                              mac, uid);
-                    Serial1.println(buf);
+                    gateEnqueueLine(buf);
                     req2->send(200,"application/json",R"({"ok":true})");
                 });
         });

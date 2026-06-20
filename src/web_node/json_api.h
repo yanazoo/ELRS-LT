@@ -5,7 +5,6 @@
 
 String rosterJson();
 String activeJson();
-String lapsJson();
 String scanJson();
 
 const char* activeName(int slot);

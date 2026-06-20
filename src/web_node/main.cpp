@@ -63,6 +63,8 @@ void setup() {
 void loop() {
     dnsServer.processNextRequest();
     ws.cleanupClients();
+    runDeferredGateTasks();   // stream race-save / pilot-backup UART dumps, paced
+    uartFlushQueue();         // emit one queued gate command line, paced
     while (Serial1.available()) {
         char c = (char)Serial1.read();
         if (c == '\n') {

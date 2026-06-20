@@ -35,7 +35,6 @@ void sendRssi(int idx, uint32_t now) {
     doc["pilot"]    = idx;
     doc["uid"]      = uidStr;
     doc["rssi"]     = (int)pilots[idx].emaRssi;
-    doc["raw"]      = pilots[idx].rawRssi;
     doc["crossing"] = pilots[idx].crossing;
     doc["signal"]   = hasSignal;
     doc["ts"]       = now;
