@@ -103,6 +103,10 @@ static void onProvision(const uint8_t uid[6]) {
     s_newProvision = true;
 }
 
+#if VALIDATE_OTA_CRC
+static void crcResetCal();   // defined below; used by startTracking()
+#endif
+
 static void startTracking() {
     fhssGenerate(ident.uid);
     hopIndex = 0; missStreak = 0; s_nextHopUs = 0;
