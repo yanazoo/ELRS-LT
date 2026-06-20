@@ -72,6 +72,8 @@ static uint16_t s_pktCount    = 0;
 static uint16_t s_tlmPktCount = 0;
 static uint16_t s_syncCount   = 0;
 static uint16_t s_rawType[4]  = {0, 0, 0, 0};
+static uint16_t s_pktA        = 0;   // packets caught by radio A this 1 Hz window
+static uint16_t s_pktB        = 0;   // packets caught by radio B this 1 Hz window
 
 // ---- ESP-NOW provision flag (set from network-task context) ----
 static volatile bool s_newProvision = false;
@@ -244,6 +246,7 @@ static void handlePacket(SxRadio &r, bool phaseAnchor) {
     sxReadPayload(r, buf, 1);            // type byte only in the hot path
     uint8_t t = buf[0] & OTA_TYPE_MASK;
     s_rawType[t]++; s_pktCount++;
+    if (&r == &g_a) s_pktA++; else s_pktB++;   // per-radio diagnostics
 
     if (t == OTA_TYPE_TLM) {
         int8_t rssi = sxReadRssiNow(r);
@@ -300,11 +303,13 @@ static void maybeReport(uint32_t now) {
 static void maybeDebugLog(uint32_t now) {
     if (now - s_tlmLogMs < 1000) return;
     const char *mode = (s_tlmPktCount > 0) ? "TLM" : "idle";
-    Serial.printf("[gate_ep1d] pkts=%u sync=%u/s lq=%u mode=%s tlm/s=%u t0=%u t2=%u t3=%u ratio=1:%u\n",
-                  (unsigned)s_pktCount, (unsigned)s_syncCount, (unsigned)lqPct(), mode,
+    Serial.printf("[gate_ep1d] pkts=%u (A=%u B=%u) sync=%u/s lq=%u mode=%s tlm/s=%u t0=%u t2=%u t3=%u ratio=1:%u\n",
+                  (unsigned)s_pktCount, (unsigned)s_pktA, (unsigned)s_pktB,
+                  (unsigned)s_syncCount, (unsigned)lqPct(), mode,
                   (unsigned)s_tlmPktCount, (unsigned)s_rawType[0], (unsigned)s_rawType[2],
                   (unsigned)s_rawType[3], (unsigned)s_tlmDenom);
     s_pktCount = 0; s_tlmPktCount = 0; s_syncCount = 0;
+    s_pktA = 0; s_pktB = 0;
     s_rawType[0] = s_rawType[1] = s_rawType[2] = s_rawType[3] = 0;
     s_tlmLogMs = now;
 }
