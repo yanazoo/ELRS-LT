@@ -255,7 +255,6 @@ static void updateLedHeartbeat() {
 static uint16_t s_crcTab[256];
 static bool     s_crcReady = false;   // true once the SYNC CRC self-test passed
 static uint8_t  s_crcHb    = 0;       // calibrated initializer high byte
-static uint8_t  s_crcGood  = 0;       // consecutive SYNC matches during calibration
 static uint8_t  s_crcMiss  = 0;       // consecutive SYNC failures after lock
 
 static void crcBuildTable() {
@@ -278,7 +277,7 @@ static uint16_t crcExtract(const uint8_t *pkt, uint8_t inp[7]) {
     for (uint8_t i = 1; i < 7; i++) inp[i] = pkt[i];
     return ((uint16_t)(pkt[0] >> 2) << 8) | pkt[7];
 }
-static void crcResetCal() { s_crcReady = false; s_crcGood = 0; s_crcMiss = 0; }
+static void crcResetCal() { s_crcReady = false; s_crcMiss = 0; }
 
 static void crcCalibrateFromSync(const uint8_t *pkt) {
     uint8_t inp[7];
@@ -289,18 +288,19 @@ static void crcCalibrateFromSync(const uint8_t *pkt) {
         else if (++s_crcMiss > 5) crcResetCal();   // lost (UID change etc.) -> recalibrate
         return;
     }
+    // Find every high byte that satisfies this SYNC's CRC and lock only if it is
+    // UNIQUE (exactly one). The true high byte always matches; a wrong one matches
+    // by chance ~1/16384, so the first SYNC is almost always unambiguous -> instant
+    // lock. The rare ambiguous SYNC is skipped (we try the next one).
+    uint8_t found = 0, count = 0;
     for (uint16_t hb = 0; hb < 256; hb++) {
-        if (crcCalc(inp, 7, (hb << 8) | lo) == inCRC) {
-            if (s_crcGood && (uint8_t)hb == s_crcHb) {
-                if (++s_crcGood >= 2) {
-                    s_crcReady = true; s_crcMiss = 0;
-                    Serial.printf("[gate_ep1d] OTA CRC validation locked (hb=%02X)\n", (unsigned)hb);
-                }
-            } else { s_crcHb = (uint8_t)hb; s_crcGood = 1; }
-            return;
-        }
+        if (crcCalc(inp, 7, (hb << 8) | lo) == inCRC) { found = (uint8_t)hb; if (++count > 1) break; }
     }
-    s_crcGood = 0;   // this SYNC matched no candidate -> stay in fallback (filtering off)
+    if (count == 1) {
+        s_crcHb = found; s_crcReady = true; s_crcMiss = 0;
+        Serial.printf("[gate_ep1d] OTA CRC validation locked (hb=%02X)\n", (unsigned)found);
+    }
+    // count==0 (algorithm/UID mismatch) or count>1 (ambiguous) -> stay in fallback.
 }
 static bool crcValidTlm(const uint8_t *pkt) {
     uint8_t inp[7];
