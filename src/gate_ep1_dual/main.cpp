@@ -103,19 +103,12 @@ static void onProvision(const uint8_t uid[6]) {
     s_newProvision = true;
 }
 
-#if VALIDATE_OTA_CRC
-static void crcResetCal();   // defined below; used by startTracking()
-#endif
-
 static void startTracking() {
     fhssGenerate(ident.uid);
     hopIndex = 0; missStreak = 0; s_nextHopUs = 0;
     s_chA = 0xFF; s_chB = 0xFF;
     lqReset();
     s_lastUidSyncMs = 0;   // require a fresh own-drone SYNC before reporting
-#if VALIDATE_OTA_CRC
-    crcResetCal();         // new UID -> recalibrate the OTA CRC initializer
-#endif
     state = ST_SCAN;
     Serial.println(F("[gate_ep1d] -> SCAN"));
 }
@@ -235,83 +228,6 @@ static void updateLedHeartbeat() {
     }
 }
 
-// ---- ELRS OTA CRC validation (reject CRC-invalid false telemetry) ----
-// LoRa hardware CRC is off, so a bit-flipped TX packet or noise can be mis-read
-// as telemetry (type 0b11) — visible as idle-trace wiggle with the drone off.
-// ELRS carries its own 14-bit OTA CRC (poly 0x2E57) over bytes[0..6], with
-// crcHigh in byte[0] bits[7:2] and crcLow in byte[7].  CRC initializer =
-//   (UID[4]<<8 | UID[5]) ^ (OTA_VERSION_ID<<8) ^ nonceValidator
-// where nonceValidator = 0 for SYNC and the per-slot OtaNonce (low byte) for TLM.
-//
-// A passive sniffer knows neither OTA_VERSION_ID nor the exact per-packet nonce:
-//   1. Auto-calibrate the initializer HIGH byte (UID[4]^OTA_VERSION_ID) from
-//      genuine own-UID SYNC packets (nonce=0).  This doubles as a self-test of
-//      our CRC vs ELRS: until two SYNCs agree, filtering stays OFF (safe — if our
-//      algorithm were wrong nothing would ever validate and we behave as before).
-//   2. For TLM, brute-force the 256 possible nonce/low-byte values: the true one
-//      always matches (a real packet is NEVER rejected) while a random/bit-flipped
-//      packet passes only ~1/64 of the time (~16x fewer false samples).
-#if VALIDATE_OTA_CRC
-static uint16_t s_crcTab[256];
-static bool     s_crcReady = false;   // true once the SYNC CRC self-test passed
-static uint8_t  s_crcHb    = 0;       // calibrated initializer high byte
-static uint8_t  s_crcMiss  = 0;       // consecutive SYNC failures after lock
-
-static void crcBuildTable() {
-    const uint16_t poly = 0x2E57, highbit = 1u << 13;
-    for (uint16_t i = 0; i < 256; i++) {
-        uint16_t crc = (uint16_t)(i << 6);
-        for (uint8_t j = 0; j < 8; j++)
-            crc = (uint16_t)((crc << 1) ^ ((crc & highbit) ? poly : 0));
-        s_crcTab[i] = crc;
-    }
-}
-static uint16_t crcCalc(const uint8_t *d, uint8_t len, uint16_t crc) {
-    while (len--)
-        crc = (uint16_t)((crc << 8) ^ s_crcTab[((crc >> 6) ^ (uint16_t)(*d++)) & 0xFF]);
-    return crc & 0x3FFF;
-}
-// CRC input = 7 bytes (type bits kept, crcHigh zeroed); returns the on-air CRC.
-static uint16_t crcExtract(const uint8_t *pkt, uint8_t inp[7]) {
-    inp[0] = pkt[0] & OTA_TYPE_MASK;
-    for (uint8_t i = 1; i < 7; i++) inp[i] = pkt[i];
-    return ((uint16_t)(pkt[0] >> 2) << 8) | pkt[7];
-}
-static void crcResetCal() { s_crcReady = false; s_crcMiss = 0; }
-
-static void crcCalibrateFromSync(const uint8_t *pkt) {
-    uint8_t inp[7];
-    uint16_t inCRC = crcExtract(pkt, inp);
-    uint16_t lo = ident.uid[5];               // SYNC: nonceValidator = 0 -> low byte = UID5
-    if (s_crcReady) {
-        if (crcCalc(inp, 7, ((uint16_t)s_crcHb << 8) | lo) == inCRC) s_crcMiss = 0;
-        else if (++s_crcMiss > 5) crcResetCal();   // lost (UID change etc.) -> recalibrate
-        return;
-    }
-    // Find every high byte that satisfies this SYNC's CRC and lock only if it is
-    // UNIQUE (exactly one). The true high byte always matches; a wrong one matches
-    // by chance ~1/16384, so the first SYNC is almost always unambiguous -> instant
-    // lock. The rare ambiguous SYNC is skipped (we try the next one).
-    uint8_t found = 0, count = 0;
-    for (uint16_t hb = 0; hb < 256; hb++) {
-        if (crcCalc(inp, 7, (hb << 8) | lo) == inCRC) { found = (uint8_t)hb; if (++count > 1) break; }
-    }
-    if (count == 1) {
-        s_crcHb = found; s_crcReady = true; s_crcMiss = 0;
-        Serial.printf("[gate_ep1d] OTA CRC validation locked (hb=%02X)\n", (unsigned)found);
-    }
-    // count==0 (algorithm/UID mismatch) or count>1 (ambiguous) -> stay in fallback.
-}
-static bool crcValidTlm(const uint8_t *pkt) {
-    uint8_t inp[7];
-    uint16_t inCRC = crcExtract(pkt, inp);
-    uint16_t hi = (uint16_t)s_crcHb << 8;
-    for (uint16_t lo = 0; lo < 256; lo++)
-        if (crcCalc(inp, 7, hi | lo) == inCRC) return true;
-    return false;
-}
-#endif // VALIDATE_OTA_CRC
-
 // ---- Packet handling (shared by both radios) ----
 // phaseAnchor: true only when the radio is parked on the CURRENT dwell channel
 // (so a SYNC's fhssIndex/nonce describes THIS dwell and may re-anchor the grid).
@@ -330,16 +246,7 @@ static void handlePacket(SxRadio &r, bool phaseAnchor) {
     s_rawType[t]++; s_pktCount++;
 
     if (t == OTA_TYPE_TLM) {
-#if VALIDATE_OTA_CRC
-        // Reject CRC-invalid "telemetry" (bit-flipped TX packet / noise read as
-        // type 0b11). Only once self-calibrated; otherwise fall through (safe).
-        sxReadPayload(r, buf, 8);
-        if (s_crcReady && !crcValidTlm(buf)) return;
-#endif
         int8_t rssi = sxReadRssiNow(r);
-        // Squelch: also ignore near-floor false telemetry (a real gate pass is far
-        // stronger, so this never hides a lap).
-        if (rssi < TLM_RSSI_GATE_DBM) return;
         if (rssi > s_tlmRssiMax) s_tlmRssiMax = rssi;
         s_tlmPktCount++;
         if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
@@ -353,9 +260,6 @@ static void handlePacket(SxRadio &r, bool phaseAnchor) {
                      ((buf[OTA_SYNC_UID5_BYTE] ^ ident.uid[5]) & OTA_SYNC_UID5_HIBITS) == 0;
         if (!uidOk) return;
         s_lastUidSyncMs = millis();      // UID gate: confirmed our drone
-#if VALIDATE_OTA_CRC
-        crcCalibrateFromSync(buf);       // self-calibrate/verify OTA CRC (nonce=0)
-#endif
 #if SYNC_PHASE_ALIGN
         if (phaseAnchor) {
             uint8_t syncFhss = buf[OTA_SYNC_FHSS_BYTE];
@@ -410,9 +314,6 @@ void setup() {
     Serial.begin(115200);
     delay(50);
     rgbLedWrite(PIN_LED, 0, 0, 0);     // WS2812 off (RMT init on first call)
-#if VALIDATE_OTA_CRC
-    crcBuildTable();
-#endif
     Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
 #ifndef BRINGUP_UID
     Serial.println(F("[gate_ep1d] awaiting UID from Gate Node (ESP-NOW / UART)"));

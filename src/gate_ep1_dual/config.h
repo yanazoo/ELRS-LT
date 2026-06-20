@@ -109,26 +109,6 @@
 // by the envelope follower (below) + the UID gate; the telemetry ratio read from
 // SYNC is logged for diagnostics (telemetry interval @500Hz: 1:8=16ms ... 1:128=256ms).
 
-// ---- Telemetry RSSI squelch (noise gate) ----
-// LoRa CRC is OFF (ELRS validates its own OTA CRC in the payload, which a passive
-// sniffer can't fully check because the TLM CRC is XORed with the per-slot nonce).
-// So an occasional TX (handset) packet whose type byte bit-flips to 0b11, or a
-// noise-triggered RX, is mis-read as telemetry.  With the drone powered OFF these
-// false samples are weak (near the noise floor) but make the idle RSSI trace
-// wiggle.  We ignore any "telemetry" sample weaker than this gate: real gate-pass
-// telemetry is far stronger (-40..-75 dBm), so lap detection is unaffected, while
-// the idle trace cleanly rests at the floor.  Lower the magnitude (e.g. -85) if a
-// little wiggle remains; raise it (e.g. -100) to also show very distant drones.
-#define TLM_RSSI_GATE_DBM   (-90)
-
-// ---- OTA CRC validation (reject CRC-invalid false telemetry) ----
-// Validate each TLM packet against ELRS's own 14-bit OTA CRC so bit-flipped TX
-// packets / noise mis-read as telemetry are dropped (the squelch alone can't
-// catch false samples stronger than TLM_RSSI_GATE_DBM). Self-calibrating and
-// self-testing from SYNC packets — if it can't lock, it safely does nothing.
-// Set to 0 to disable entirely.
-#define VALIDATE_OTA_CRC     1
-
 // ---- Reported RSSI floor ----
 #define RSSI_FLOOR_DBM      (-120)  // reported when the drone's telemetry is absent
 
