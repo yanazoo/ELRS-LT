@@ -318,8 +318,14 @@ static void maybeDebugLog(uint32_t now) {
 void setup() {
     Serial.begin(115200);
     delay(50);
+    // Run at 80 MHz instead of 240 MHz. The sniffer's hot path is a continuous
+    // busy-poll; at 240 MHz that keeps the ESP32-PICO-D4 near full power and the
+    // small board runs hot, which can brown out / thermally upset radio B. 80 MHz
+    // is plenty (SPI is 8 MHz, timing is in ms) and cuts dynamic power ~3x.
+    setCpuFrequencyMhz(80);
     rgbLedWrite(PIN_LED, 0, 0, 0);     // WS2812 off (RMT init on first call)
-    Serial.println(F("[gate_ep1d] boot (ESP32 dual SX1280)"));
+    Serial.printf("[gate_ep1d] boot (ESP32 dual SX1280) cpu=%uMHz\n",
+                  (unsigned)getCpuFrequencyMhz());
 #ifndef BRINGUP_UID
     Serial.println(F("[gate_ep1d] awaiting UID from Gate Node (ESP-NOW / UART)"));
 #endif
