@@ -247,6 +247,10 @@ static void handlePacket(SxRadio &r, bool phaseAnchor) {
 
     if (t == OTA_TYPE_TLM) {
         int8_t rssi = sxReadRssiNow(r);
+        // Squelch: ignore near-floor false telemetry (bit-flipped TX packet or
+        // noise mis-read as type 0b11 — visible as idle-trace wiggle with the
+        // drone off). A real gate pass is far stronger, so this never hides a lap.
+        if (rssi < TLM_RSSI_GATE_DBM) return;
         if (rssi > s_tlmRssiMax) s_tlmRssiMax = rssi;
         s_tlmPktCount++;
         if (s_tlmIntervalCnt < 255) s_tlmIntervalCnt++;
