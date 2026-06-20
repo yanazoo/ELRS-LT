@@ -42,15 +42,6 @@ var sdDownloadBuf = [], sdDownloadPath = '';
 var calibSaveTimers = {};
 var scanAutoRefreshH = null;
 
-// Calib graph display squelch (cosmetic, display-only — does NOT affect lap
-// detection, which runs on the gate firmware). With the drone off, the sniffer
-// can occasionally mis-read a bit-flipped TX packet as weak telemetry, making
-// the idle waveform wiggle. We floor any charted RSSI more than this many dB
-// below the pilot's Exit threshold (i.e. well below the lap-relevant range), so
-// the idle trace rests flat. Increase to hide a little more; decrease to show
-// weaker/farther signal on the graph.
-var CALIB_DISPLAY_GAP_DB = 8;
-
 function toast(msg, dur) {
   dur=dur||2000;
   var t=document.getElementById('statusMsg');

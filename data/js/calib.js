@@ -60,11 +60,6 @@ function initChart(id){
 
 function pushChart(id,rssi,crossing){
   var c=charts[id];if(!c)return;
-  // Display squelch (cosmetic): floor any sample well below the lap-relevant
-  // range so the idle waveform doesn't wiggle on weak false telemetry. Lap
-  // detection is unaffected (it runs on the gate firmware, not this graph).
-  var p=slots[id];
-  if(p&&rssi>-119&&rssi<(p.exitRssi-CALIB_DISPLAY_GAP_DB))rssi=-120;
   c.data.copyWithin(0,1);c.data[199]=rssi;c.cross.copyWithin(0,1);c.cross[199]=crossing?1:0;
   chartDirty[id]=true;
 }
