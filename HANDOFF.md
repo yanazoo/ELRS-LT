@@ -3,7 +3,7 @@
 > Claude Code（Windows / PlatformIO）向けオンボーディング文書。
 > まずこれを読み、次に `ARCHITECTURE.md`、それから下の Step を参照。
 >
-> **状態: 実装完了・main にマージ済み（現行 1.0.1）。** 現行の仕様・使い方・
+> **状態: 実装完了・main にマージ済み（現行 1.1.0）。** 現行の仕様・使い方・
 > セットアップは [README.md](README.md) / [README.en.md](README.en.md) を参照。
 > 以下の開発ステップは経緯として残している。
 
@@ -49,7 +49,7 @@
 
 ドローンの EP は、パイロットの TX へテレメトリパケットを送り返す。このパケットは
 移動するドローンから発信されるため、同期したゲート受信機は通過の瞬間に RSSI の
-ピークを観測できる。詳しい理屈は `docs/ARCHITECTURE.md` を参照。
+ピークを観測できる。詳しい理屈は `ARCHITECTURE.md` を参照。
 
 ## パイロットごとの設定
 
@@ -80,6 +80,11 @@ pio run -e web_node -t upload
 pio run -e web_node -t uploadfs   # JS/HTML 変更後に必要
 ```
 
+> **重要**: スニファーは 500Hz LoRa 固定ビルド。パイロットの TX 側も
+> **パケットレート 500Hz / テレメトリ比率 1:2 / ダイナミックレート OFF** が必須
+> （README「TX 側の必須設定」参照）。gate_node と web_node は UART 230400 で
+> 通信するため、必ず両方を同じバージョンで焼くこと。
+
 EP 書き込み配線（USB-シリアル変換, 3.3V）:
 
 ```
@@ -106,7 +111,7 @@ VCC   ->  3V3
    スロットオフセットを計算、以降ホップに追従する。
 5. **ESP-NOW 送信** - `GateEP1Packet` を Gate Node の MAC へ送る。
 6. **Gate Node 統合** - `promiscuous.*` を UID キーに変更し、既存の
-   `processRSSI()` を呼ぶ。`docs/gate_esp32_changes.md` 参照。
+   `processRSSI()` を呼ぶ（実装済み: `src/gate_node/promiscuous.*`）。
 7. **4台同時テスト** - スニファー4台・パイロット4機でラップ検出を通しで検証。
 8. **Web UI** - Config タブの MAC -> UID 表記変更。ロースターの往復を確認。
 
@@ -120,7 +125,8 @@ VCC   ->  3V3
 
 解決済み:
 - GPIO0 テストポイント -> 不要。RX パッド（GPIO3）を LOW にして電源投入すると
-  ESP8285 の UART ブートローダーに入る。5V/GND/RX/TX で esptool 書き込み。
+  ESP8285 の UART ブートローダーに入る。VCC(3.3V)/GND/RX/TX で esptool 書き込み
+  （配線は README の書き込み図を参照。給電は必ず 3.3V）。
 - SX1280 SPI ピン -> ELRS の generic ESP8285 2.4GHz RX レイアウトから確定
   （EP1/EP2 はこのリファレンスピン配置を共有）。値は config.h に記載:
   NSS=15 SCK=14 MOSI=13 MISO=12 BUSY=5 DIO1=4 RST=2 RX=3 TX=1 LED=16。
