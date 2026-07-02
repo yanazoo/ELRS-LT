@@ -21,7 +21,7 @@
 // ---- Flashing note ----
 // No separate GPIO0 test point is needed. Holding the RX pad (GPIO3) LOW at
 // power-on drops the ESP8285 into the UART bootloader. Flash custom firmware
-// over the exposed 5V / GND / RX / TX pads with esptool (UART method).
+// over the exposed VCC (3.3V) / GND / RX / TX pads with esptool (UART method).
 // A solid LED with the TX off = the unit is sitting in bootloader mode.
 
 // ---- ELRS / FHSS ----

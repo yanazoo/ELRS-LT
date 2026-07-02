@@ -79,7 +79,7 @@ An improved version of [yanazoo/ESP-NOW-Lap-Timer](https://github.com/yanazoo/ES
                   │  ESP32-WROVER-E         │
                   │  EMA + lap detection    │
                   └────────────┬────────────┘
-                               │ UART 115200 bps
+                               │ UART 230400 bps
                   ┌────────────▼────────────┐
                   │  Web Node (XIAO S3)     │
                   │  WiFi AP: ESP-NOW-LT    │
@@ -148,6 +148,36 @@ pio run -e web_node -t uploadfs   # required after changing JS/HTML
 > 2. If the LED stays lit, it is in bootloader mode (waiting for UART)
 > 3. Run `pio run -e gate_ep1 -t upload`
 > 4. Remove the GND tie and reset when done
+
+---
+
+## Required TX Settings (nothing works without these)
+
+The sniffer firmware is built for **500 Hz LoRa mode only**
+(SF5 / BW800 / CR_LI_4_6 — see `ELRS_SLOT_US` in `src/gate_ep1/config.h` and
+`ELRS_LORA_*` in `src/gate_ep1/sx1280_sniffer.cpp`). If the pilot's TX runs any
+other rate the sniffer can never lock and the trace stays at the floor.
+
+| Setting | Required value | Notes |
+|---|---|---|
+| Packet rate | **500 Hz (LoRa)** | For other rates, rebuild with matching `ELRS_SLOT_US` / `ELRS_LORA_*` |
+| FLRC modes (F500 / F1000 / D250 / D500) | **Not supported** | Not LoRa modulation — cannot be received |
+| Dynamic rate | **OFF** | A rate switch drops the lock |
+| Telemetry | **ON, ratio 1:2** | Higher ratios (1:4+) capture sparsely and look choppy |
+| ELRS version | 3.6.x (verified on 3.6.3) | OTA packet layout must match |
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| Trace stays at the floor (~-120) | ① TX packet rate is not 500 Hz LoRa (FLRC / 250 Hz won't work) — see "Required TX Settings" ② telemetry OFF — turn it ON ③ UID gate unconfirmed — check the pilot's TX + drone are powered and the UID is correct |
+| Trace is choppy / jumpy | Telemetry ratio too high (1:4+) — set it to **1:2** |
+| Laps fire constantly (or never) with the drone merely nearby | Enter/Exit thresholds too low (e.g. -80/-90) — set **-55/-62** in the Calib tab. Place Enter between the pass peak (-35 to -45 dBm) and the background (-65 to -75 dBm). Thresholds persist in the Web Node's NVS, so pilots registered under old-default firmware keep -80/-90 until adjusted |
+| No / broken RSSI in the Web UI | UART baud mismatch between gate_node and web_node — reflash **both** from the same version (currently 230400) |
+| SD card not detected | Check wiring: MOSI=GPIO15 / MISO=GPIO2 / SCK=GPIO14 / **CS=GPIO13** |
+| Sniffer LED keeps blinking (stuck in SCAN) | Rate mismatch or no signal. Watch the serial monitor (115200) for `[gate_ep1] locked` |
 
 ---
 
